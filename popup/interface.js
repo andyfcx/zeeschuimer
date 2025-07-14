@@ -191,7 +191,11 @@ async function get_stats() {
         let new_num_items = parseInt(response[platform]);
         if(!document.querySelector("#" + row_id)) {
             let toggle_field = 'zs-enabled-' + platform;
-            let enabled = await background.browser.storage.local.get([toggle_field])
+            if (platform === "facebook") {
+                enabled = { [toggle_field]: '1' };
+            } else {
+                enabled = await background.browser.storage.local.get([toggle_field]);
+            }
             enabled = enabled.hasOwnProperty(toggle_field) && !!parseInt(enabled[toggle_field]);
             let row = createElement("tr", {"id": row_id, 'data-enabled': enabled ? '1' : '0'});
 
