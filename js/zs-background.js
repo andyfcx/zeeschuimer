@@ -52,13 +52,13 @@ window.zeeschuimer = {
             let enabled = [];
             for (const module in zeeschuimer.modules) {
                 const enabled_key = 'zs-enabled-' + module;
-                const is_enabled = await browser.storage.local.get(enabled_key);
+                const is_enabled = await chrome.storage.local.get(enabled_key);
                 if (is_enabled.hasOwnProperty(enabled_key) && !!parseInt(is_enabled[enabled_key])) {
                     enabled.push(module);
                 }
             }
             let path = enabled.length > 0 ? 'images/zeeschuimer-icon-active.png' : 'images/zeeschuimer-icon-inactive.png';
-            browser.browserAction.setIcon({path: path})
+            chrome.browserAction.setIcon({path: path})
         }, 500);
     },
 
@@ -68,7 +68,7 @@ window.zeeschuimer = {
      * @param details  Request details
      */
     listener: function (details) {
-        let filter = browser.webRequest.filterResponseData(details.requestId);
+        let filter = chrome.webRequest.filterResponseData(details.requestId);
         let decoder = new TextDecoder("utf-8");
         let full_response = '';
 
@@ -98,7 +98,7 @@ window.zeeschuimer = {
             let enabled_modules = [];
             for(const module_id in eligible_modules) {
                 const module_enabled_key = 'zs-enabled-' + module_id;
-                let module_enabled = await browser.storage.local.get(module_enabled_key);
+                let module_enabled = await chrome.storage.local.get(module_enabled_key);
                 module_enabled = module_enabled.hasOwnProperty(module_enabled_key) && !!parseInt(module_enabled[module_enabled_key]);
 
                 if(module_enabled) {
@@ -135,7 +135,7 @@ window.zeeschuimer = {
         try {
             // get the *actual url* of the tab, not the url that the request
             // reports, which may be wrong
-            let tab = await browser.tabs.get(tabId);
+            let tab = await chrome.tabs.get(tabId);
             origin_url = tab.url;
         } catch (Error) {
             tabId = -1;
@@ -201,8 +201,8 @@ window.zeeschuimer = {
      * @returns {Promise<boolean>}
      */
     has_tab: async function () {
-        const tabs = await browser.tabs.query({});
-        const full_url = browser.runtime.getURL('popup/interface.html');
+        const tabs = await chrome.tabs.query({});
+        const full_url = chrome.runtime.getURL('popup/interface.html');
         const zeeschuimer_tab = tabs.filter((tab) => {
             return (tab.url === full_url);
         });
@@ -231,19 +231,19 @@ window.zeeschuimer = {
 
 zeeschuimer.init();
 
-browser.webRequest.onBeforeRequest.addListener(
+chrome.webRequest.onBeforeRequest.addListener(
     zeeschuimer.listener, {urls: ["https://*/*"], types: ["main_frame", "xmlhttprequest"]}, ["blocking"]
 );
 
-browser.webNavigation.onCommitted.addListener(
+chrome.webNavigation.onCommitted.addListener(
     zeeschuimer.nav_handler
 );
 
-browser.browserAction.onClicked.addListener(async () => {
+chrome.browserAction.onClicked.addListener(async () => {
     let tab = await zeeschuimer.has_tab();
     if (!tab) {
-        browser.tabs.create({url: 'popup/interface.html'});
+        chrome.tabs.create({url: 'popup/interface.html'});
     } else if (!tab.active) {
-        browser.tabs.update(tab.id, {active: true});
+        chrome.tabs.update(tab.id, {active: true});
     }
 });

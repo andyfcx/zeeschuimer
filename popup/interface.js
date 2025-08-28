@@ -1,4 +1,4 @@
-const background = browser.extension.getBackgroundPage();
+const background = chrome.extension.getBackgroundPage();
 var have_4cat = false;
 var xhr;
 var is_uploading = false;
@@ -63,7 +63,7 @@ function createElement(tag, attributes={}, content=undefined, prepend_icon=undef
  * @returns {Promise<*>}
  */
 async function get_4cat_url(e) {
-    let url = await background.browser.storage.local.get(['4cat-url']);
+    let url = await background.chrome.storage.local.get(['4cat-url']);
     if (url['4cat-url']) {
         url = url['4cat-url'];
     } else {
@@ -95,9 +95,9 @@ async function set_4cat_url(e) {
             }
             url = url.split('/').slice(0, 3).join('/');
         }
-        await background.browser.storage.local.set({'4cat-url': url});
+        await background.chrome.storage.local.set({'4cat-url': url});
     } else {
-        url = await background.browser.storage.local.get(['4cat-url']);
+        url = await background.chrome.storage.local.get(['4cat-url']);
         if(url['4cat-url']) {
             url = url['4cat-url'];
         } else {
@@ -151,12 +151,12 @@ function activate_buttons() {
  */
 async function toggle_listening(e) {
     let platform = e.target.getAttribute('name');
-    let now = await background.browser.storage.local.get([platform]);
+    let now = await background.chrome.storage.local.get([platform]);
     let current = !!parseInt(now[platform]);
     let updated = current ? 0 : 1;
     e.target.parentNode.parentNode.parentNode.parentNode.setAttribute('data-enabled', updated);
 
-    await background.browser.storage.local.set({[platform]: String(updated)});
+    await background.chrome.storage.local.set({[platform]: String(updated)});
 }
 
 
@@ -191,7 +191,7 @@ async function get_stats() {
         let new_num_items = parseInt(response[platform]);
         if(!document.querySelector("#" + row_id)) {
             let toggle_field = 'zs-enabled-' + platform;
-            let enabled = await background.browser.storage.local.get([toggle_field])
+            let enabled = await background.chrome.storage.local.get([toggle_field])
             enabled = enabled.hasOwnProperty(toggle_field) && !!parseInt(enabled[toggle_field]);
             let row = createElement("tr", {"id": row_id, 'data-enabled': enabled ? '1' : '0'});
 
@@ -294,7 +294,7 @@ async function button_handler(event) {
         let blob = await get_blob(platform);
         let filename = 'zeeschuimer-export-' + platform + '-' + date.toISOString().split(".")[0].replace(/:/g, "") + '.ndjson';
         const downloadUrl = window.URL.createObjectURL(blob);
-        const downloadId = await browser.downloads.download({
+        const downloadId = await chrome.downloads.download({
             url: window.URL.createObjectURL(blob),
             filename: filename,
             conflictAction: 'uniquify'
@@ -348,7 +348,7 @@ async function button_handler(event) {
                 } else if(xhr.status === 429) {
                     status.innerText = '4CAT server refused upload, too soon after previous one. Try again in a minute.'
                 } else if(xhr.status === 403) {
-                    status.innerText = 'Could not log in to 4CAT server. Make sure to log in to 4CAT in this browser.';
+                    status.innerText = 'Could not log in to 4CAT server. Make sure to log in to 4CAT in this chrome.';
                 } else if(xhr.status === 404 && xhr.responseText.indexOf('Unknown platform or source format') >= 0) {
                     status.innerText = 'The 4CAT server does not accept ' + platform + ' datasets. The 4CAT ' +
                         'administrator may need to enable the data source or upgrade 4CAT.';
@@ -658,20 +658,20 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     const version_container = document.querySelector('.version a');
     const current_version = version_container.innerText;
-    const known_version = await background.browser.storage.local.get('zs-version');
+    const known_version = await background.chrome.storage.local.get('zs-version');
     if(!known_version || current_version !== known_version['zs-version']) {
         const version_alert = createElement('span', {'class': 'popup new-version'}, 'Zeeschuimer has been updated to a new version! You can read the release notes via this link.');
         const ok_button = createElement('button', {'class': 'close-popup'}, 'OK');
         ok_button.addEventListener('click', async function(e) {
-            await background.browser.storage.local.set({'zs-version': current_version});
+            await background.chrome.storage.local.set({'zs-version': current_version});
             document.querySelector('.new-version').remove();
         });
         version_alert.appendChild(ok_button);
         document.querySelector('header').appendChild(version_alert);
     }
 
-    const fourcat_url = await background.browser.storage.local.get('4cat-url');
+    const fourcat_url = await background.chrome.storage.local.get('4cat-url');
     document.querySelector('#fourcat-url').value = fourcat_url['4cat-url'] ? fourcat_url['4cat-url'] : '';
 
-    browser.downloads.onChanged.addListener(downloadListener);
+    chrome.downloads.onChanged.addListener(downloadListener);
 });
