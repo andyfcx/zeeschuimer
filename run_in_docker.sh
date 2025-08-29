@@ -1,0 +1,1 @@
+chromium --no-sandbox --disable-gpu   --headless=new   --user-data-dir=/tmp/chrome-profile   --load-extension=/usr/src/my-plugin   https://example.com
