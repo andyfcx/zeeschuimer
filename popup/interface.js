@@ -131,7 +131,7 @@ function activate_buttons() {
                 button.setAttribute('title', '');
             }
 
-        } else if(button.classList.contains('download-ndjson') || button.classList.contains('reset')) {
+        } else if(button.classList.contains('download-ndjson') || button.classList.contains('download-csv') || button.classList.contains('reset')) {
             new_status = !(items > 0);
         }
 
@@ -220,6 +220,13 @@ async function get_stats() {
 
             actions.appendChild(clear_button);
             actions.appendChild(download_button);
+            if (platform === 'Facebook (posts)') {
+                let csv_button = createElement("button", {
+                    "data-platform": platform,
+                    "class": "download-csv"
+                }, ".csv");
+                actions.appendChild(csv_button);
+            }
             actions.appendChild(fourcat_button);
 
             row.appendChild(actions);
@@ -300,6 +307,23 @@ async function button_handler(event) {
             conflictAction: 'uniquify'
         });
         downloadUrls.set(downloadId, downloadUrl);
+
+        event.target.classList.remove('loading');
+
+    } else if (event.target.matches('.download-csv')) {
+        let platform = event.target.getAttribute('data-platform');
+        let date = new Date();
+        event.target.classList.add('loading');
+
+        let blob = await get_facebook_csv_blob(platform);
+        let filename = 'zeeschuimer-export-' + platform + '-' + date.toISOString().split(".")[0].replace(/:/g, "") + '.csv';
+        const csvUrl = window.URL.createObjectURL(blob);
+        const downloadId = await browser.downloads.download({
+            url: csvUrl,
+            filename: filename,
+            conflictAction: 'uniquify'
+        });
+        downloadUrls.set(downloadId, csvUrl);
 
         event.target.classList.remove('loading');
 
