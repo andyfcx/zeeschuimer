@@ -539,6 +539,150 @@ async function get_blob(platform) {
 }
 
 /**
+ * Deep search for all values of a given key anywhere in a nested object/array
+ */
+function deepFind(obj, key) {
+    const results = [];
+    function search(o) {
+        if (!o || typeof o !== 'object') return;
+        if (Array.isArray(o)) {
+            for (const item of o) search(item);
+        } else {
+            for (const k of Object.keys(o)) {
+                if (k === key) results.push(o[k]);
+                search(o[k]);
+            }
+        }
+    }
+    search(obj);
+    return results;
+}
+
+/**
+ * Extract reduced Facebook fields from a zeeschuimer item.
+ * Mirrors the logic of fb_parser() in FB-ndjson-parser.
+ */
+function extractFacebookFields(item) {
+    const data = item.data || {};
+
+    let post_id = item.item_id || data.id || '';
+    if (typeof post_id === 'string' && post_id.startsWith('Story:')) {
+        post_id = post_id.split(':')[1];
+    }
+
+    const postUrls = [...new Set(deepFind(data, 'wwwURL').filter(Boolean))];
+    const post_url = postUrls.join('; ');
+
+    // Find story.creation_time anywhere in the tree
+    function findStoryCreationTimes(o) {
+        const times = [];
+        function search(obj) {
+            if (!obj || typeof obj !== 'object') return;
+            if (Array.isArray(obj)) {
+                for (const el of obj) search(el);
+            } else {
+                if (obj.story && obj.story.creation_time) {
+                    times.push(obj.story.creation_time);
+                }
+                for (const k of Object.keys(obj)) search(obj[k]);
+            }
+        }
+        search(o);
+        return times;
+    }
+    const creationTimes = findStoryCreationTimes(data);
+    let creation_time = 'Unknown';
+    if (creationTimes.length > 0) {
+        const ts = Math.min(...creationTimes);
+        const d = new Date(ts * 1000);
+        creation_time = d.toISOString().replace('T', ' ').split('.')[0];
+    }
+
+    // Find 'attachments' anywhere, then 'url' within each
+    const attachmentContainers = deepFind(data, 'attachments');
+    let attachmentUrls = [];
+    for (const container of attachmentContainers) {
+        attachmentUrls = attachmentUrls.concat(deepFind(container, 'url'));
+    }
+    const attachments = [...new Set(attachmentUrls.filter(Boolean))].join('; ');
+
+    // text from comet_sections[*].content.story.message.text
+    let text = '';
+    const cometSections = Array.isArray(data.comet_sections) ? data.comet_sections : (data.comet_sections ? [data.comet_sections] : []);
+    for (const section of cometSections) {
+        const t = section?.content?.story?.message?.text;
+        if (t) { text = t; break; }
+    }
+
+    // reactions from comet_ufi_summary_and_actions_renderer
+    const ufiRenderers = deepFind(data, 'comet_ufi_summary_and_actions_renderer');
+    let reactions = [];
+    let total_reaction_count = 0;
+    for (const ufi of ufiRenderers) {
+        const edges = ufi?.feedback?.top_reactions?.edges;
+        if (edges && Array.isArray(edges) && edges.length > 0) {
+            reactions = edges.map(e => `${e.node?.localized_name}:${e.reaction_count}`);
+            total_reaction_count = edges.reduce((sum, e) => sum + (e.reaction_count || 0), 0);
+            break;
+        }
+    }
+
+    // comment_count
+    const commentRenderers = deepFind(data, 'comments_count_summary_renderer');
+    let comment_count = 0;
+    for (const cr of commentRenderers) {
+        const total = cr?.feedback?.comment_rendering_instance?.comments?.total_count;
+        if (total !== undefined) { comment_count = total; break; }
+    }
+
+    // share_count
+    const shareCounts = deepFind(data, 'i18n_share_count');
+    const share_count = shareCounts.length > 0 ? (parseInt(String(shareCounts[0]).replace(/,/g, '')) || 0) : 0;
+
+    return {
+        post_id,
+        post_url,
+        creation_time,
+        attachments,
+        text,
+        total_reaction_count,
+        reactions: reactions.join('; '),
+        comment_count,
+        share_count
+    };
+}
+
+/**
+ * Build a CSV string (with BOM for Excel) from an array of flat objects
+ */
+function buildCsv(rows) {
+    if (rows.length === 0) return '';
+    const headers = Object.keys(rows[0]);
+    const escape = v => {
+        const s = String(v ?? '');
+        return (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
+            ? '"' + s.replace(/"/g, '""') + '"'
+            : s;
+    };
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+        lines.push(headers.map(h => escape(row[h])).join(','));
+    }
+    return '\uFEFF' + lines.join('\r\n');
+}
+
+/**
+ * Get a CSV Blob of Facebook items with reduced fields
+ */
+async function get_facebook_csv_blob(platform) {
+    const rows = [];
+    await iterate_items(platform, function(item) {
+        rows.push(extractFacebookFields(item));
+    });
+    return new Blob([buildCsv(rows)], {type: 'text/csv;charset=utf-8'});
+}
+
+/**
  * Use StreamSaver to download a Blob
  *
  * This is advantageous for very large files because the download starts
