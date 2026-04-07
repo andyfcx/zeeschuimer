@@ -94,6 +94,66 @@ For some platforms, the level of detail of the data that can be collected depend
 Note that these are *known* limitations; data capture may break or change based on platform changes. Always 
 cross-reference captured data with what you are seeing in your browser.
 
+## Development builds
+
+The repository contains a shared-core architecture that produces both a Firefox (Manifest V2) and a Chrome (Manifest V3, internal use) build from the same codebase.
+
+### Source layout
+
+```
+src/
+  core/          # Shared: database, module registry, parse pipeline, navigation
+  adapters/
+    firefox/     # Firefox-specific background (filterResponseData)
+    chrome/      # Chrome-specific: service worker, content script, page hook
+  modules/       # Platform parsers (same as root modules/, with SW compat fixes)
+manifests/       # firefox.json (MV2) and chrome.json (MV3)
+scripts/         # build-firefox.sh, build-chrome.sh
+```
+
+### Requirements
+
+* `bash`
+* Firefox 89+ for the Firefox build
+* Chrome 111+ for the Chrome build (uses `world: "MAIN"` in content\_scripts)
+
+### Building
+
+```bash
+bash scripts/build-firefox.sh   # → build/firefox/
+bash scripts/build-chrome.sh    # → build/chrome/
+```
+
+### Loading locally
+
+**Firefox:**
+1. Open `about:debugging`
+2. Click **This Firefox**
+3. Click **Load Temporary Add-on…**
+4. Select any file inside `build/firefox/`
+
+**Chrome (internal use only — not for Web Store):**
+1. Open `chrome://extensions`
+2. Enable **Developer mode**
+3. Click **Load unpacked**
+4. Select the `build/chrome/` directory
+
+### Feature comparison: Firefox vs Chrome
+
+| Feature | Firefox | Chrome |
+|---|---|---|
+| Manifest version | V2 | V3 |
+| Request capture | `filterResponseData` (full response, service-worker level) | Page-injected fetch/XHR hook (best-effort) |
+| Capture completeness | All matching HTTPS requests | Only requests made via `fetch` or `XMLHttpRequest` after hook injection |
+| Background lifetime | Persistent background page | Service worker (may be suspended) |
+| Popup access to background | `browser.extension.getBackgroundPage()` | Dexie re-opened in popup + module list in `chrome.storage.local` |
+| Store publishing | Signed .xpi releases | Not configured |
+
+**Chrome-specific caveats:**
+* Requests that complete before the page hook is injected (very early in page load) may be missed.
+* The service worker can be killed by Chrome between browsing sessions; data is safe in IndexedDB but the session counter restarts.
+* Streaming responses (chunked transfer) are captured after the full response is available, same as Firefox.
+
 ## Credits & license
 Zeeschuimer was developed by Stijn Peeters for the [Digital Methods Initiative](https://digitalmethods.net) and is 
 licensed under the Mozilla Public License, 2.0. Refer to the LICENSE file for more information.
