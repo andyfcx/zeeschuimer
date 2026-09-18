@@ -239,10 +239,10 @@ async function toggle_parse_export(e) {
 /**
  * Show what capture is doing
  *
- * Only relevant where responses are captured in the page rather than read
- * from the request (i.e. in Chrome), where it is otherwise impossible to tell
- * whether nothing is captured at all or whether captured responses simply do
- * not contain any items.
+ * Only relevant where capture runs through the debugger API (i.e. in Chrome):
+ * it shows how many tabs are being captured from and what has been captured,
+ * which is otherwise impossible to tell apart from a platform simply not
+ * sending any items.
  *
  * @returns {Promise<void>}
  */
@@ -273,11 +273,15 @@ async function update_capture_status() {
         return without_protocol.length > 60 ? without_protocol.slice(0, 60) + '\u2026' : without_protocol;
     };
 
-    let text = 'Capture: ' + stats.responses + ' response(s) seen, ' + stats.responses_matched +
-        ' from enabled platforms, ' + stats.items + ' item(s) stored';
+    let text = 'Capturing from ' + stats.attached_tabs + ' tab(s): ' + stats.responses +
+        ' response(s) seen, ' + stats.responses_matched + ' from enabled platforms, ' +
+        stats.items + ' item(s) stored';
     const last_url = stats.last_match_url || stats.last_url;
     if(last_url) {
         text += ' \u2014 last: ' + shorten(last_url);
+    }
+    if(stats.last_error) {
+        text += ' \u2014 ' + stats.last_error;
     }
 
     container.innerText = text;

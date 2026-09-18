@@ -17,7 +17,9 @@ self.zeeschuimer = {
         responses_matched: 0,
         items: 0,
         last_url: null,
-        last_match_url: null
+        last_match_url: null,
+        attached_tabs: 0,
+        last_error: null
     },
 
     /**
@@ -145,13 +147,42 @@ self.zeeschuimer = {
 
         filter.onstop = async (event) => {
             // pass the document to all eligible modules that are also enabled
-            const enabled_modules = await zeeschuimer.get_enabled_modules(document_url, origin_url);
-            await zeeschuimer.parse_request(full_response, origin_url, document_url, details.tabId, enabled_modules);
+            await zeeschuimer.handle_capture(full_response, document_url, origin_url, details.tabId);
             filter.disconnect();
             full_response = '';
         }
 
         return {};
+    },
+
+    /**
+     * Handle a captured response
+     *
+     * Shared by every capture mechanism: it checks which modules want the
+     * response, keeps the diagnostics up to date and hands the response to the
+     * parser.
+     *
+     * @param body  Content of the response
+     * @param document_url  URL the response was loaded from
+     * @param origin_url  URL of the page the response was requested from
+     * @param tab_id  ID of the tab the response was captured in
+     * @returns {Promise<Object>}  What was done with the response
+     */
+    handle_capture: async function (body, document_url, origin_url, tab_id) {
+        this.capture_stats.responses += 1;
+        this.capture_stats.last_url = document_url;
+
+        await self.zeeschuimer_ready;
+        const enabled_modules = await this.get_enabled_modules(document_url, origin_url);
+        if (enabled_modules.length === 0) {
+            return {captured: false, items: 0};
+        }
+
+        this.capture_stats.responses_matched += 1;
+        this.capture_stats.last_match_url = document_url;
+
+        const items = await this.parse_request(body, origin_url, document_url, tab_id, enabled_modules);
+        return {captured: true, items: items};
     },
 
     /**
@@ -258,20 +289,36 @@ self.zeeschuimer = {
     /**
      * Callback for browser navigation
      * Increases the nav_index for a given tab to aid in deduplication of captured items
-     * @param tabId  Tab ID to update nav index for
+     * @param details  Navigation event details, or a tab ID
      */
-    nav_handler: async function (tabId) {
-        if (tabId.hasOwnProperty("tabId")) {
-            tabId = tabId.tabId;
+    nav_handler: async function (details) {
+        let tab_id = details;
+        if (details && typeof details === "object") {
+            if (details.hasOwnProperty("frameId") && details.frameId !== 0) {
+                // only navigation of the tab itself; a page's iframes committing
+                // would otherwise keep increasing the index, which would make
+                // deduplication of captured items less effective
+                return;
+            }
+            tab_id = details.tabId;
         }
 
-        let nav = await db.nav.where({"session": this.session, "tab_id": tabId});
+        if (typeof tab_id !== "number") {
+            return;
+        }
+
+        // as an event callback this function is not called on the zeeschuimer
+        // object, so the session is read from it explicitly
+        await self.zeeschuimer_ready;
+        const session = zeeschuimer.session;
+
+        const nav = await db.nav.where({"session": session, "tab_id": tab_id}).first();
         if (!nav) {
-            nav = {"session": this.session, "tab_id": tabId, "index": 0}
-            await db.nav.add(nav);
+            await db.nav.add({"session": session, "tab_id": tab_id, "index": 0});
+            return;
         }
 
-        await db.nav.where({"session": this.session, "tab_id": tabId}).modify({"index": nav["index"] + 1});
+        await db.nav.where({"session": session, "tab_id": tab_id}).modify({"index": nav["index"] + 1});
     }
 }
 
@@ -288,11 +335,10 @@ if (zs_can_filter_responses) {
 }
 
 /**
- * Handle messages from the capture content scripts and the interface
+ * Handle messages from the interface
  *
- * Chrome has no way to read response bodies from the background context, so
- * there the content scripts in js/zs-capture-*.js capture them in the page and
- * send them here. The interface uses this to find out which modules exist.
+ * The interface uses this to find out which modules exist and, where capture
+ * runs through the debugger API, to show what capture is doing.
  *
  * Responses are sent via sendResponse() instead of by returning a promise,
  * because Chrome does not support the latter.
@@ -315,43 +361,10 @@ browser.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         return false;
     }
 
-    if (message.type === 'zeeschuimer-capture-enabled') {
-        // capture content scripts use this to stay dormant while no module
-        // for the page they run in is enabled
-        zeeschuimer.get_enabled_modules(message.url, message.url)
-            .then(enabled_modules => sendResponse(enabled_modules.length > 0))
-            .catch(() => sendResponse(false));
-        return true;
-    }
-
     if (message.type === 'zeeschuimer-capture-stats') {
         // diagnostics for the interface
         sendResponse(zeeschuimer.capture_stats);
         return false;
-    }
-
-    if (message.type === 'zeeschuimer-capture') {
-        const tab_id = sender.tab ? sender.tab.id : -1;
-        const origin_url = message.origin_url || (sender.tab ? sender.tab.url : message.url);
-
-        zeeschuimer.capture_stats.responses += 1;
-        zeeschuimer.capture_stats.last_url = message.url;
-
-        self.zeeschuimer_ready
-            .then(() => zeeschuimer.get_enabled_modules(message.url, origin_url))
-            .then(async (enabled_modules) => {
-                if (enabled_modules.length === 0) {
-                    sendResponse({captured: false, items: 0});
-                    return;
-                }
-
-                zeeschuimer.capture_stats.responses_matched += 1;
-                zeeschuimer.capture_stats.last_match_url = message.url;
-                const items = await zeeschuimer.parse_request(message.body, origin_url, message.url, tab_id, enabled_modules);
-                sendResponse({captured: true, items: items});
-            })
-            .catch(error => sendResponse({error: String(error)}));
-        return true;
     }
 
     return false;

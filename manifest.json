@@ -38,6 +38,7 @@
       "js/lib.js",
       "js/zs-parser.js",
       "js/zs-background.js",
+      "js/zs-capture-debugger.js",
       "modules/tiktok.js",
       "modules/tiktok-comments.js",
       "modules/instagram.js",

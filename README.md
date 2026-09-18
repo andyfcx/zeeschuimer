@@ -58,9 +58,19 @@ This writes an unpacked extension to `dist/chrome` and a zip file for distributi
 to `chrome://extensions`, switch on 'Developer mode', click 'Load unpacked' and select the `dist/chrome` folder. Chrome 
 111 or later is required. This also works in other Chromium-based browsers, such as Edge and Brave.
 
-Capture works slightly differently in Chrome: Chrome extensions cannot read response bodies from the browser's own 
-networking API, so in Chrome the extension instead reads them in the page itself, and passes the page's own HTML along 
-as well. Everything else, including the interface and the exports, is identical.
+Capture works differently in Chrome. Chrome extensions cannot read response bodies from the browser's own networking 
+API, and reading them in the page instead does not work either: a script injected into a page's own context is subject 
+to that page's content security policy, which the supported platforms (Facebook in particular) do not allow extension 
+scripts under. Chrome therefore captures through the same protocol the developer tools use, which has two consequences:
+
+* Chrome asks for permission to 'debug' pages when the extension is installed, and shows a notification bar 
+  ('Zeeschuimer started debugging this browser') in tabs that capture is active in. The bar appears only for tabs 
+  showing a platform that capture is switched on for.
+* The developer tools cannot be used in a tab while capture is active in it. If you open them anyway, capture stops for 
+  that tab; the interface says so, and closing the developer tools and reloading the page resumes it.
+
+The interface shows how many tabs are being captured from and how much has been captured, so you can tell capture is 
+working before exporting. Everything else, including the exports, is identical to Firefox.
 
 ## How to use
 A [guide to using Zeeschuimer and 4CAT](https://zeeschuimer.4cat.nl/) is available. Basic instructions 
@@ -119,9 +129,9 @@ platform. The following limitations are known:
   * 'Suggested for you' and 'Sponsored' posts on the front page feed
 * *TikTok* items that cannot be captured:
   * Live streams
-* In *Chrome*, items are only captured from requests the page itself makes; requests made from a page's own service 
-  worker or web worker are not seen. Data embedded in the page is read from the loaded document instead of from the 
-  response, so a page that rewrites it before the extension gets to it may yield fewer items than in Firefox.
+* In *Chrome*, capture only runs in tabs the extension is attached to, which it does when a tab navigates to a platform 
+  that capture is switched on for. Responses a tab loaded before that (for example when you switch a platform on while 
+  its page is already open) are not captured; reloading the page captures them.
 
 For some platforms, the level of detail of the data that can be collected depends on the page it is captured from:
 
