@@ -11,6 +11,15 @@ self.zeeschuimer = {
     session: null,
     tab_url_map: {},
 
+    // diagnostics, reset whenever the background context starts
+    capture_stats: {
+        responses: 0,
+        responses_matched: 0,
+        items: 0,
+        last_url: null,
+        last_match_url: null
+    },
+
     /**
      * Register Zeeschuimer module
      * @param name  Module identifier
@@ -194,6 +203,7 @@ self.zeeschuimer = {
         nav_index = nav_index.session + ":" + nav_index.tab_id + ":" + nav_index.index;
 
         let item_list = [];
+        let stored_items = 0;
         for (let module_id in this.modules) {
             if(!enabled_modules.includes(module_id)) {
                 continue
@@ -210,6 +220,7 @@ self.zeeschuimer = {
                     let exists = await db.items.where({"item_id": item_id, "nav_index": nav_index}).first();
 
                     if (!exists) {
+                        stored_items += 1;
                         await db.items.add({
                             "nav_index": nav_index,
                             "item_id": item_id,
@@ -223,9 +234,12 @@ self.zeeschuimer = {
                     }
                 }));
 
-                return;
+                this.capture_stats.items += stored_items;
+                return stored_items;
             }
         }
+
+        return 0;
     },
 
     /**
@@ -310,17 +324,31 @@ browser.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         return true;
     }
 
+    if (message.type === 'zeeschuimer-capture-stats') {
+        // diagnostics for the interface
+        sendResponse(zeeschuimer.capture_stats);
+        return false;
+    }
+
     if (message.type === 'zeeschuimer-capture') {
         const tab_id = sender.tab ? sender.tab.id : -1;
         const origin_url = message.origin_url || (sender.tab ? sender.tab.url : message.url);
 
+        zeeschuimer.capture_stats.responses += 1;
+        zeeschuimer.capture_stats.last_url = message.url;
+
         self.zeeschuimer_ready
             .then(() => zeeschuimer.get_enabled_modules(message.url, origin_url))
             .then(async (enabled_modules) => {
-                if (enabled_modules.length > 0) {
-                    await zeeschuimer.parse_request(message.body, origin_url, message.url, tab_id, enabled_modules);
+                if (enabled_modules.length === 0) {
+                    sendResponse({captured: false, items: 0});
+                    return;
                 }
-                sendResponse({captured: enabled_modules.length > 0});
+
+                zeeschuimer.capture_stats.responses_matched += 1;
+                zeeschuimer.capture_stats.last_match_url = message.url;
+                const items = await zeeschuimer.parse_request(message.body, origin_url, message.url, tab_id, enabled_modules);
+                sendResponse({captured: true, items: items});
             })
             .catch(error => sendResponse({error: String(error)}));
         return true;

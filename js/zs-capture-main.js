@@ -25,16 +25,28 @@
     // is enabled for this page; captures made before that are buffered
     let capture_enabled = null;
     let buffer = [];
-    const max_buffered = 25;
+    let buffered_size = 0;
+    const max_buffered = 200;
+    const max_buffered_size = 32 * 1024 * 1024;
 
     window.addEventListener('message', function (event) {
-        if (event.source !== window || !event.data || event.data.type !== 'zeeschuimer-capture-state') {
+        if (event.source !== window || !event.data) {
+            return;
+        }
+
+        if (event.data.type === 'zeeschuimer-capture-ping') {
+            window.postMessage({type: 'zeeschuimer-capture-pong'}, '*');
+            return;
+        }
+
+        if (event.data.type !== 'zeeschuimer-capture-state') {
             return;
         }
 
         capture_enabled = !!event.data.enabled;
         const buffered = buffer;
         buffer = [];
+        buffered_size = 0;
         if (capture_enabled) {
             buffered.forEach(capture => relay(capture.url, capture.body));
         }
@@ -59,8 +71,9 @@
         }
 
         if (capture_enabled === null) {
-            if (buffer.length < max_buffered) {
+            if (buffer.length < max_buffered && buffered_size + body.length <= max_buffered_size) {
                 buffer.push({url: absolute_url, body: body});
+                buffered_size += body.length;
             }
             return;
         }

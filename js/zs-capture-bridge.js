@@ -14,13 +14,21 @@
     const api = typeof browser !== 'undefined' ? browser : chrome;
     let capture_enabled = false;
     let document_sent_for = null;
+    let page_script_present = false;
 
     window.addEventListener('message', function (event) {
-        if (event.source !== window || !event.data || event.data.type !== 'zeeschuimer-capture-data') {
+        if (event.source !== window || !event.data) {
             return;
         }
 
-        send_capture(event.data.url, event.data.body);
+        if (event.data.type === 'zeeschuimer-capture-pong') {
+            page_script_present = true;
+            return;
+        }
+
+        if (event.data.type === 'zeeschuimer-capture-data') {
+            send_capture(event.data.url, event.data.body);
+        }
     });
 
     /**
@@ -44,6 +52,37 @@
         } catch (e) {
             // extension context invalidated, e.g. after an update or reload
         }
+    }
+
+    /**
+     * Make sure the page context script is running
+     *
+     * It is normally injected by the browser, as declared in the manifest, but
+     * that can fail (for example when a site's content security policy
+     * interferes), in which case it is injected as a script tag here instead.
+     * The page context answers a ping to say it is there.
+     */
+    function ensure_page_script() {
+        window.postMessage({type: 'zeeschuimer-capture-ping'}, '*');
+
+        setTimeout(function () {
+            if (page_script_present) {
+                return;
+            }
+
+            try {
+                const script = document.createElement('script');
+                script.src = api.runtime.getURL('js/zs-capture-main.js');
+                script.addEventListener('load', function () {
+                    script.remove();
+                    window.postMessage({type: 'zeeschuimer-capture-ping'}, '*');
+                    window.postMessage({type: 'zeeschuimer-capture-state', enabled: capture_enabled}, '*');
+                });
+                (document.head || document.documentElement).appendChild(script);
+            } catch (e) {
+                console.warn('Zeeschuimer could not install its capture script in this page: ' + e);
+            }
+        }, 1000);
     }
 
     /**
@@ -72,8 +111,7 @@
      * Tell the page context whether to capture at all
      *
      * Capture stays off while no Zeeschuimer module for this page is enabled,
-     * so that browsing is not slowed down for nothing. Toggles in the
-     * interface are picked up on the next check.
+     * so that browsing is not slowed down for nothing.
      */
     function refresh_state() {
         try {
@@ -94,6 +132,17 @@
         }
     }
 
+    ensure_page_script();
     refresh_state();
-    setInterval(refresh_state, 5000);
+
+    // toggling capture in the interface takes effect immediately; the interval
+    // is a backstop in case a storage event is missed
+    if (api.storage && api.storage.onChanged) {
+        api.storage.onChanged.addListener(function (changes, area) {
+            if (area === 'local' && Object.keys(changes).some(key => key.indexOf('zs-enabled-') === 0)) {
+                refresh_state();
+            }
+        });
+    }
+    setInterval(refresh_state, 15000);
 })();

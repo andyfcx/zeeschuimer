@@ -237,6 +237,54 @@ async function toggle_parse_export(e) {
 }
 
 /**
+ * Show what capture is doing
+ *
+ * Only relevant where responses are captured in the page rather than read
+ * from the request (i.e. in Chrome), where it is otherwise impossible to tell
+ * whether nothing is captured at all or whether captured responses simply do
+ * not contain any items.
+ *
+ * @returns {Promise<void>}
+ */
+async function update_capture_status() {
+    const container = document.querySelector('#capture-status');
+    if(!container) {
+        return;
+    }
+
+    if(zs_can_filter_responses) {
+        container.setAttribute('aria-hidden', 'true');
+        return;
+    }
+
+    let stats;
+    try {
+        stats = await browser.runtime.sendMessage({type: 'zeeschuimer-capture-stats'});
+    } catch (e) {
+        return;
+    }
+
+    if(!stats) {
+        return;
+    }
+
+    const shorten = (url) => {
+        const without_protocol = String(url).split('://').pop();
+        return without_protocol.length > 60 ? without_protocol.slice(0, 60) + '\u2026' : without_protocol;
+    };
+
+    let text = 'Capture: ' + stats.responses + ' response(s) seen, ' + stats.responses_matched +
+        ' from enabled platforms, ' + stats.items + ' item(s) stored';
+    const last_url = stats.last_match_url || stats.last_url;
+    if(last_url) {
+        text += ' \u2014 last: ' + shorten(last_url);
+    }
+
+    container.innerText = text;
+    container.setAttribute('aria-hidden', 'false');
+}
+
+/**
  * Get Zeeschuimer stats
  *
  * Loads the amount of items collected, etc. This function is called
@@ -349,6 +397,7 @@ async function get_stats() {
     });
 
     set_4cat_url(true);
+    await update_capture_status();
     activate_buttons();
     update_icon();
     init_tooltips();

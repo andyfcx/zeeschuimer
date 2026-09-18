@@ -387,6 +387,13 @@
             display: none;
         }
 
+        #capture-status {
+            text-align: center;
+            font-size: 0.8em;
+            margin: 0 0 1em 0;
+            opacity: 0.8;
+        }
+
         #parse-status {
             text-align: center;
             font-size: 0.8em;
@@ -435,6 +442,7 @@
                   title="Adds 'parsed .csv' and 'parsed .json' buttons per platform. These downloads contain the collected items reduced to the most relevant fields (post ID, URL, date, text, attachments, engagement metrics), deduplicated by post, as produced by zs-parser. Facebook and TikTok have dedicated parsers; other platforms fall back to the Facebook one.">?</span>
         </div>
         <p id="parse-status"></p>
+        <p id="capture-status" aria-hidden="true"></p>
     </section>
     <section id="configuration">
         <h2><span>Connect to 4CAT</span></h2>
