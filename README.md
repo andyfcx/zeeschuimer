@@ -40,15 +40,34 @@ locally collect and parse the data search engines are sending to your browser as
 
 ## Installation
 
+This is Andy's fork of Zeeschuimer ([andyfcx/zeeschuimer](https://github.com/andyfcx/zeeschuimer)), which adds Chrome 
+support and parsed CSV/JSON downloads on top of the 
+[upstream DMI extension](https://github.com/digitalmethodsinitiative/zeeschuimer). It has no signed releases of its 
+own, so it is always installed from a local copy of the code, either way you get one:
+
+* **With git:** `git clone https://github.com/andyfcx/zeeschuimer.git`
+* **Without git:** open the [repository page](https://github.com/andyfcx/zeeschuimer), click the green 'Code' button, 
+  then 'Download ZIP', and unzip it.
+
+Then follow the steps for your browser below.
+
 ### Firefox
-Zeeschuimer is in active development. .xpi files that you can use to install it in your browser are available on the 
-[releases](https://github.com/digitalmethodsinitiative/zeeschuimer/releases) page. These are signed and can be installed 
-in any Firefox-based browser. If you want to run the latest development version instead, you can [do so from the Firefox
-debugging console](https://www.youtube.com/watch?v=J7el77F1ckg) after cloning the repository locally.
+Because this fork is not signed, it is loaded as a *temporary* add-on, which stays installed until Firefox is closed 
+and needs to be loaded again after that (repeating steps 2-3 below; your captured data is kept).
+
+1. Open Firefox and go to `about:debugging#/runtime/this-firefox`.
+2. Click 'Load Temporary Add-on...' and select the `manifest.json` file inside the folder you downloaded.
+3. Go to `about:addons`, open the 'Extensions' tab, and make sure Zeeschuimer is enabled there.
+4. Its icon (<img alt="Zeeschuimer's browser icon, a yellow 'Z' on a green background" src="images/zeeschuimer-16.png"> 
+   a yellow 'Z') should now appear in the toolbar; if you don't see it, click the puzzle-piece 'Extensions' icon to 
+   find it there, and consider pinning it so it stays visible.
+
+If you'd rather run the code straight from a git checkout instead of reloading a downloaded copy, you can also 
+[do so from the Firefox debugging console](https://www.youtube.com/watch?v=J7el77F1ckg).
 
 ### Chrome
 Chrome needs a manifest v3 version of the extension, which is built from the same source with a separate manifest 
-(`manifest-chrome.json`). After cloning the repository, run:
+(`manifest-chrome.json`). From a terminal, in the folder you downloaded, run:
 
 ```
 ./build-chrome.sh
@@ -79,6 +98,13 @@ identical to Firefox.
 
 Note that removing the extension in `chrome://extensions` also clears its settings, so after loading it again capture is 
 switched off for every platform. Pressing 'Reload' on the extension keeps them.
+
+### Try it
+
+However you installed it, the quickest way to check it worked: open Zeeschuimer's interface (its icon in the toolbar), 
+switch capture on for Facebook, then browse to facebook.com and scroll a little. Zeeschuimer's item count for Facebook 
+should go up as you scroll; click '.ndjson' or 'parsed .csv' next to it to export what was captured. See 'How to use' 
+below for the rest.
 
 ## How to use
 A [guide to using Zeeschuimer and 4CAT](https://zeeschuimer.4cat.nl/) is available. Basic instructions 
