@@ -111,16 +111,24 @@ example [FoxScroller](https://addons.mozilla.org/en-US/firefox/addon/foxscroller
 ### Parsed downloads
 The raw ndjson export contains everything the platform sent, which is a lot more than most analyses need. With the 
 'Offer parsed downloads' switch (on by default) each platform also gets 'parsed .csv' and 'parsed .json' buttons. These 
-run the captured items through the same parser as the [zs-parser](https://github.com/andyfcx/zs-parser) tool, which 
-reduces every item to a flat row and removes duplicate posts:
+reduce every item to a flat row and remove duplicate posts:
 
 | Platform | Fields |
 |----------|--------|
 | Facebook | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `total_reaction_count`, `reactions`, `comment_count`, `share_count` |
 | TikTok | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `author_name`, `author_id`, `like_count`, `comment_count`, `share_count`, `play_count` |
+| X/Twitter | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `author_name`, `author_id`, `like_count`, `retweet_count`, `reply_count`, `quote_count`, `view_count`, `retweeted_from`, `promoted` |
+| Threads | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `author_name`, `author_id`, `like_count`, `reply_count`, `repost_count`, `reposted_from` |
 
-Other platforms fall back to the Facebook parser, as the command line tool does; for those, the raw ndjson export is 
-usually the better choice. The .csv file is written with a byte order mark so that spreadsheet software recognises it as 
+The Facebook and TikTok parsers are ports of the ones in the 
+[zs-parser](https://github.com/andyfcx/zs-parser) command line tool, so their output is interchangeable with it; the 
+X/Twitter and Threads parsers only exist here. Other platforms fall back to the Facebook parser, as the command line 
+tool does; for those, the raw ndjson export is usually the better choice.
+
+A retweet's or repost's own text is empty or cut off, so the text, media and engagement counts of the post that was 
+retweeted or reposted are used, while `author_name` and `author_id` stay whoever retweeted or reposted it and 
+`retweeted_from`/`reposted_from` name the original author. Tweets longer than 280 characters keep their full text, and 
+for a video the highest quality variant is listed as the attachment. The .csv file is written with a byte order mark so that spreadsheet software recognises it as 
 UTF-8, and lists (attachments, reactions) are joined with '; ' in a single column. Switching the option off hides the 
 buttons again; the setting is remembered.
 

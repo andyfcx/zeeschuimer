@@ -28,8 +28,17 @@
      * Python's datetime.fromtimestamp() is local time, so this is too.
      */
     function format_timestamp(timestamp) {
-        const date = new Date(safe_int(timestamp) * 1000);
-        if (isNaN(date.getTime())) {
+        return format_date(new Date(safe_int(timestamp) * 1000));
+    }
+
+    /**
+     * Format a date as '%Y-%m-%d %H:%M:%S' in local time
+     *
+     * @param date  Date object
+     * @returns {string}  Formatted date, or 'Unknown' if it is not a date
+     */
+    function format_date(date) {
+        if (!date || isNaN(date.getTime())) {
             return "Unknown";
         }
         const pad = (number) => String(number).padStart(2, "0");
@@ -259,6 +268,252 @@
     }
 
     /**
+     * Find the tweet a captured item is about
+     *
+     * Zeeschuimer's X/Twitter module stores tweets in two shapes: the one the
+     * site's GraphQL API returns, where the tweet itself is under 'legacy',
+     * and the one the older adaptive.json endpoint returns, which the module
+     * rearranges into the same shape. Both are handled here.
+     *
+     * @param data  Captured item data
+     * @returns {Object}  The tweet's own fields, or an empty object
+     */
+    function twitter_tweet(data) {
+        if (data.legacy && typeof data.legacy === "object") {
+            return data.legacy;
+        }
+        if (data.tweet && data.tweet.legacy) {
+            return data.tweet.legacy;
+        }
+        return {};
+    }
+
+    /**
+     * Find who posted a tweet
+     *
+     * The author is in a different place depending on how old the captured
+     * data is; the current shape keeps it under 'core', older ones under
+     * 'legacy', and adaptive.json items have it added by the module.
+     *
+     * @param data  Captured item data
+     * @returns {Object}  Display name and handle
+     */
+    function twitter_author(data) {
+        const candidates = [].concat(
+            walk_path(data, ["core", "user_results", "result", "core"]),
+            walk_path(data, ["core", "user_results", "result", "legacy"]),
+            walk_path(data, ["tweet", "core", "user_results", "result", "core"]),
+            walk_path(data, ["tweet", "core", "user_results", "result", "legacy"]),
+            walk_path(data, ["user"])
+        );
+
+        for (const user of candidates) {
+            if (user && typeof user === "object" && (user.screen_name || user.name)) {
+                return {name: user.name || "", handle: user.screen_name || ""};
+            }
+        }
+
+        // last resort: the handle is in there somewhere
+        const handles = deep_find(data, "screen_name").filter(handle => typeof handle === "string");
+        return {name: "", handle: handles.length ? handles[0] : ""};
+    }
+
+    /**
+     * Collect the media attached to a tweet
+     *
+     * For videos the highest quality variant is used, for images the image
+     * itself; 'extended_entities' is preferred because it holds all media of a
+     * tweet with several images, where 'entities' only holds the first.
+     *
+     * @param tweet  Tweet fields
+     * @returns {Array}  Media URLs
+     */
+    function twitter_attachments(tweet) {
+        const media = [].concat(
+            (tweet.extended_entities && tweet.extended_entities.media) || [],
+            (tweet.entities && tweet.entities.media) || []
+        );
+
+        const urls = [];
+        for (const item of media) {
+            if (!item) {
+                continue;
+            }
+
+            const variants = item.video_info && Array.isArray(item.video_info.variants)
+                ? item.video_info.variants.filter(variant => variant && variant.url && variant.bitrate !== undefined)
+                : [];
+
+            if (variants.length) {
+                variants.sort((first, second) => safe_int(second.bitrate) - safe_int(first.bitrate));
+                urls.push(variants[0].url);
+            } else if (item.media_url_https || item.media_url) {
+                urls.push(item.media_url_https || item.media_url);
+            }
+        }
+
+        return [...new Set(urls)];
+    }
+
+    /**
+     * Parse X/Twitter items
+     *
+     * @param items  Array of Zeeschuimer items
+     * @param log  Optional callback for status messages
+     * @returns {Array}  Array of flat objects, deduplicated by post ID
+     */
+    function tw_parser(items, log) {
+        const result_data = [];
+
+        for (const item of items) {
+            const data = item.data || {};
+            const tweet = twitter_tweet(data);
+            const author = twitter_author(data);
+
+            const post_id = String(tweet.id_str || data.rest_id || data.id || "");
+
+            // a retweet's own text is cut off after 140 characters, so the
+            // text and media of the tweet that was retweeted are used instead
+            const retweet_results = [].concat(
+                walk_path(tweet, ["retweeted_status_result", "result"]),
+                walk_path(tweet, ["retweeted_status_result", "result", "tweet"])
+            ).filter(result => result && typeof result === "object");
+            const retweet = retweet_results.length ? retweet_results[0] : null;
+            const retweeted_from = retweet ? twitter_author(retweet).handle : "";
+            const source = retweet ? twitter_tweet(retweet) : tweet;
+
+            // tweets longer than 280 characters keep their full text here
+            const long_text = [].concat(
+                walk_path(retweet || data, ["note_tweet", "note_tweet_results", "result", "text"]),
+                walk_path(retweet || data, ["tweet", "note_tweet", "note_tweet_results", "result", "text"])
+            ).filter(text => typeof text === "string");
+
+            const text = long_text.length ? long_text[0] : (source.full_text || source.text || "");
+
+            const view_counts = [].concat(
+                walk_path(data, ["views", "count"]),
+                walk_path(data, ["tweet", "views", "count"])
+            );
+
+            result_data.push({
+                post_id: post_id,
+                post_url: author.handle && post_id
+                    ? "https://x.com/" + author.handle + "/status/" + post_id
+                    : (post_id ? "https://x.com/i/status/" + post_id : item.source_platform_url),
+                creation_time: tweet.created_at ? format_date(new Date(tweet.created_at)) : "Unknown",
+                attachments: twitter_attachments(source),
+                text: text,
+                author_name: author.name,
+                author_id: author.handle,
+                like_count: safe_int(tweet.favorite_count),
+                retweet_count: safe_int(tweet.retweet_count),
+                reply_count: safe_int(tweet.reply_count),
+                quote_count: safe_int(tweet.quote_count),
+                view_count: view_counts.length ? safe_int(view_counts[0]) : 0,
+                retweeted_from: retweeted_from,
+                promoted: !!data.promoted
+            });
+        }
+
+        return deduplicate(result_data, log);
+    }
+
+    /**
+     * Pick the largest of a set of Instagram-style media candidates
+     *
+     * @param candidates  Array of media candidates
+     * @returns {string}  URL of the largest one, or an empty string
+     */
+    function largest_media(candidates) {
+        if (!Array.isArray(candidates) || !candidates.length) {
+            return "";
+        }
+
+        const usable = candidates.filter(candidate => candidate && candidate.url);
+        if (!usable.length) {
+            return "";
+        }
+
+        usable.sort((first, second) => (safe_int(second.width) * safe_int(second.height)) -
+            (safe_int(first.width) * safe_int(first.height)));
+        return usable[0].url;
+    }
+
+    /**
+     * Collect the media attached to a Threads post
+     *
+     * A post holds either one image or video, or a carousel of them, in the
+     * same shape Instagram uses.
+     *
+     * @param post  Post fields
+     * @returns {Array}  Media URLs
+     */
+    function threads_attachments(post) {
+        const posts = [post].concat(Array.isArray(post.carousel_media) ? post.carousel_media : []);
+        const urls = [];
+
+        for (const item of posts) {
+            if (!item) {
+                continue;
+            }
+
+            if (Array.isArray(item.video_versions) && item.video_versions.length) {
+                urls.push(largest_media(item.video_versions));
+            } else if (item.image_versions2 && item.image_versions2.candidates) {
+                urls.push(largest_media(item.image_versions2.candidates));
+            }
+        }
+
+        return [...new Set(urls.filter(Boolean))];
+    }
+
+    /**
+     * Parse Threads items
+     *
+     * @param items  Array of Zeeschuimer items
+     * @param log  Optional callback for status messages
+     * @returns {Array}  Array of flat objects, deduplicated by post ID
+     */
+    function th_parser(items, log) {
+        const result_data = [];
+
+        for (const item of items) {
+            const post = item.data || {};
+            const app_info = post.text_post_app_info || {};
+
+            // a repost has no content of its own: its text, media and counts
+            // are those of the post that was reposted, while the author stays
+            // whoever reposted it, as with a retweet on X
+            const repost = app_info.reposted_post && typeof app_info.reposted_post === "object"
+                ? app_info.reposted_post : null;
+            const source = repost || post;
+            const source_app_info = source.text_post_app_info || {};
+
+            const author = post.user || {};
+            const source_author = source.user || author;
+            const code = source.code || post.code || "";
+
+            result_data.push({
+                post_id: String(post.pk || post.id || ""),
+                post_url: code
+                    ? "https://www.threads.com/@" + (source_author.username || "") + "/post/" + code
+                    : item.source_platform_url,
+                creation_time: post.taken_at ? format_timestamp(post.taken_at) : "Unknown",
+                attachments: threads_attachments(source),
+                text: (source.caption && source.caption.text) ? source.caption.text : "",
+                author_name: author.full_name || "",
+                author_id: author.username || "",
+                like_count: safe_int(source.like_count),
+                reply_count: safe_int(source_app_info.direct_reply_count),
+                repost_count: safe_int(source_app_info.repost_count),
+                reposted_from: repost ? (source_author.username || "") : ""
+            });
+        }
+
+        return deduplicate(result_data, log);
+    }
+
+    /**
      * Deduplicate parsed rows by post ID, logging both counts
      */
     function deduplicate(rows, log) {
@@ -293,6 +548,12 @@
         } else if (source_platform.indexOf("tiktok") !== -1) {
             report("Using TikTok parser for platform: " + items[0].source_platform);
             return tk_parser(items, report);
+        } else if (source_platform.indexOf("twitter") !== -1 || source_platform.indexOf("x.com") !== -1) {
+            report("Using X/Twitter parser for platform: " + items[0].source_platform);
+            return tw_parser(items, report);
+        } else if (source_platform.indexOf("threads") !== -1) {
+            report("Using Threads parser for platform: " + items[0].source_platform);
+            return th_parser(items, report);
         }
 
         report("Unknown platform: " + items[0].source_platform + ", falling back to Facebook parser");
@@ -358,12 +619,15 @@
     global.zs_parser = {
         safe_int: safe_int,
         format_timestamp: format_timestamp,
+        format_date: format_date,
         deep_find: deep_find,
         deep_find_path: deep_find_path,
         walk_path: walk_path,
         remove_duplicates_by_key: remove_duplicates_by_key,
         fb_parser: fb_parser,
         tk_parser: tk_parser,
+        tw_parser: tw_parser,
+        th_parser: th_parser,
         general_parser: general_parser,
         to_csv: to_csv,
         to_json: to_json
