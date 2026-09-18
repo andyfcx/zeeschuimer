@@ -17,7 +17,9 @@ into your own analysis pipeline.
 
 Currently, it supports the following platforms:
 * [TikTok](https://www.tiktok.com) (posts and comments)
+* [Facebook](https://www.facebook.com) (posts only)
 * [Instagram](https://www.instagram.com) (posts only)
+* [Threads](https://www.threads.com)
 * [X/Twitter](https://www.x.com)
 * [LinkedIn](https://www.linkedin.com)
 * [9gag](https://9gag.com)
@@ -37,10 +39,28 @@ explicitly ask it to do so. It uses the
 locally collect and parse the data search engines are sending to your browser as you use it.
 
 ## Installation
+
+### Firefox
 Zeeschuimer is in active development. .xpi files that you can use to install it in your browser are available on the 
 [releases](https://github.com/digitalmethodsinitiative/zeeschuimer/releases) page. These are signed and can be installed 
 in any Firefox-based browser. If you want to run the latest development version instead, you can [do so from the Firefox
 debugging console](https://www.youtube.com/watch?v=J7el77F1ckg) after cloning the repository locally.
+
+### Chrome
+Chrome needs a manifest v3 version of the extension, which is built from the same source with a separate manifest 
+(`manifest-chrome.json`). After cloning the repository, run:
+
+```
+./build-chrome.sh
+```
+
+This writes an unpacked extension to `dist/chrome` and a zip file for distribution. To install the unpacked version, go 
+to `chrome://extensions`, switch on 'Developer mode', click 'Load unpacked' and select the `dist/chrome` folder. Chrome 
+111 or later is required. This also works in other Chromium-based browsers, such as Edge and Brave.
+
+Capture works slightly differently in Chrome: Chrome extensions cannot read response bodies from the browser's own 
+networking API, so in Chrome the extension instead reads them in the page itself, and passes the page's own HTML along 
+as well. Everything else, including the interface and the exports, is identical.
 
 ## How to use
 A [guide to using Zeeschuimer and 4CAT](https://zeeschuimer.4cat.nl/) is available. Basic instructions 
@@ -70,6 +90,22 @@ when you've scrolled down enough to be satisfied with the amount of items.
 If you find yourself scrolling a lot to collect data, consider using another browser extension to do it for you, for 
 example [FoxScroller](https://addons.mozilla.org/en-US/firefox/addon/foxscroller/).
 
+### Parsed downloads
+The raw ndjson export contains everything the platform sent, which is a lot more than most analyses need. With the 
+'Offer parsed downloads' switch (on by default) each platform also gets 'parsed .csv' and 'parsed .json' buttons. These 
+run the captured items through the same parser as the [zs-parser](https://github.com/andyfcx/zs-parser) tool, which 
+reduces every item to a flat row and removes duplicate posts:
+
+| Platform | Fields |
+|----------|--------|
+| Facebook | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `total_reaction_count`, `reactions`, `comment_count`, `share_count` |
+| TikTok | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `author_name`, `author_id`, `like_count`, `comment_count`, `share_count`, `play_count` |
+
+Other platforms fall back to the Facebook parser, as the command line tool does; for those, the raw ndjson export is 
+usually the better choice. The .csv file is written with a byte order mark so that spreadsheet software recognises it as 
+UTF-8, and lists (attachments, reactions) are joined with '; ' in a single column. Switching the option off hides the 
+buttons again; the setting is remembered.
+
 ## Limitations
 
 Due to the technical limitations, it may not be possible to collect all items from all 'views' for each supported 
@@ -83,6 +119,9 @@ platform. The following limitations are known:
   * 'Suggested for you' and 'Sponsored' posts on the front page feed
 * *TikTok* items that cannot be captured:
   * Live streams
+* In *Chrome*, items are only captured from requests the page itself makes; requests made from a page's own service 
+  worker or web worker are not seen. Data embedded in the page is read from the loaded document instead of from the 
+  response, so a page that rewrites it before the extension gets to it may yield fewer items than in Firefox.
 
 For some platforms, the level of detail of the data that can be collected depends on the page it is captured from:
 

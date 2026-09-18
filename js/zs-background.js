@@ -1,12 +1,12 @@
-window.db = new Dexie('zeeschuimer-items');
-window.db.version(1).stores({
+self.db = new Dexie('zeeschuimer-items');
+self.db.version(1).stores({
     items: "++id, item_id, nav_index, source_platform",
     uploads: "++id",
     nav: "++id, tab_id, session",
     settings: "key"
 });
 
-window.zeeschuimer = {
+self.zeeschuimer = {
     modules: {},
     session: null,
     tab_url_map: {},
@@ -48,18 +48,71 @@ window.zeeschuimer = {
         await db.nav.where("session").notEqual(this.session).delete();
 
         // synchronise browser icon with whether capture is enabled or not
-        setInterval(async function () {
-            let enabled = [];
-            for (const module in zeeschuimer.modules) {
-                const enabled_key = 'zs-enabled-' + module;
-                const is_enabled = await browser.storage.local.get(enabled_key);
-                if (is_enabled.hasOwnProperty(enabled_key) && !!parseInt(is_enabled[enabled_key])) {
-                    enabled.push(module);
-                }
+        await this.update_icon();
+    },
+
+    /**
+     * Set the browser icon depending on whether any module is enabled
+     */
+    update_icon: async function () {
+        let enabled = [];
+        for (const module_id in this.modules) {
+            if (await this.module_is_enabled(module_id)) {
+                enabled.push(module_id);
             }
-            let path = enabled.length > 0 ? 'images/zeeschuimer-icon-active.png' : 'images/zeeschuimer-icon-inactive.png';
-            browser.browserAction.setIcon({path: path})
-        }, 500);
+        }
+
+        const path = enabled.length > 0 ? 'images/zeeschuimer-icon-active.png' : 'images/zeeschuimer-icon-inactive.png';
+        try {
+            await zs_action.setIcon({path: path});
+        } catch (e) {
+            // the icon is cosmetic; never let it break capturing
+        }
+    },
+
+    /**
+     * Check whether capture is enabled for a given module
+     * @param module_id  Module ID
+     * @returns {Promise<boolean>}
+     */
+    module_is_enabled: async function (module_id) {
+        const enabled_key = 'zs-enabled-' + module_id;
+        const enabled = await browser.storage.local.get(enabled_key);
+        return enabled.hasOwnProperty(enabled_key) && !!parseInt(enabled[enabled_key]);
+    },
+
+    /**
+     * Determine which modules should parse a given request
+     *
+     * A module is eligible if it listens on the domain of either the captured
+     * URL or the URL of the page it was requested from, and if capture is
+     * enabled for it.
+     *
+     * @param document_url  URL of the captured content
+     * @param origin_url  URL of the page the content was requested from
+     * @returns {Promise<Array>}  List of module IDs
+     */
+    get_enabled_modules: async function (document_url, origin_url) {
+        if (!origin_url) {
+            origin_url = document_url;
+        }
+
+        const domain_of = (url) => String(url).split('://').pop().split('/')[0].replace(/^www\./, '').toLowerCase();
+        const possible_source_domains = [domain_of(document_url), domain_of(origin_url)];
+
+        let enabled_modules = [];
+        for (const module_id in this.modules) {
+            const domain = this.modules[module_id]['domain'].toLowerCase();
+            if (!possible_source_domains.some((source_domain) => source_domain.endsWith(domain))) {
+                continue;
+            }
+
+            if (await this.module_is_enabled(module_id)) {
+                enabled_modules.push(module_id);
+            }
+        }
+
+        return enabled_modules;
     },
 
     /**
@@ -75,18 +128,6 @@ window.zeeschuimer = {
         const document_url = details.url;
         const origin_url = details.hasOwnProperty("originUrl") && details.originUrl ? details.originUrl : document_url;
 
-        // both the domain of the document itself, as well as the domain of the document it was requested by via fetch
-        const document_source_domain = document_url.split('://').pop().split('/')[0].replace(/^www\./, '').toLowerCase();
-        const possible_source_domains = [
-            document_source_domain,
-            origin_url.split('://').pop().split('/')[0].replace(/^www\./, '').toLowerCase()
-        ];
-
-        // the document can be parsed by all modules listening on either the origin or document's URL's domain
-        let eligible_modules = Object.fromEntries(Object.entries(window.zeeschuimer.modules).filter(entry => {
-            return possible_source_domains.some((domain) => domain.endsWith(entry[1]["domain"].toLowerCase()));
-        }));
-
         filter.ondata = event => {
             let str = decoder.decode(event.data, {stream: true});
             full_response += str;
@@ -95,16 +136,7 @@ window.zeeschuimer = {
 
         filter.onstop = async (event) => {
             // pass the document to all eligible modules that are also enabled
-            let enabled_modules = [];
-            for(const module_id in eligible_modules) {
-                const module_enabled_key = 'zs-enabled-' + module_id;
-                let module_enabled = await browser.storage.local.get(module_enabled_key);
-                module_enabled = module_enabled.hasOwnProperty(module_enabled_key) && !!parseInt(module_enabled[module_enabled_key]);
-
-                if(module_enabled) {
-                    enabled_modules.push(module_id);
-                }
-            }
+            const enabled_modules = await zeeschuimer.get_enabled_modules(document_url, origin_url);
             await zeeschuimer.parse_request(full_response, origin_url, document_url, details.tabId, enabled_modules);
             filter.disconnect();
             full_response = '';
@@ -229,17 +261,89 @@ window.zeeschuimer = {
     }
 }
 
-zeeschuimer.init();
+// initialisation may still be running when the first event comes in, which
+// especially happens in Chrome, where the background context is started on
+// demand; everything that needs a session index waits for this promise
+self.zeeschuimer_ready = zeeschuimer.init();
 
-browser.webRequest.onBeforeRequest.addListener(
-    zeeschuimer.listener, {urls: ["https://*/*"], types: ["main_frame", "xmlhttprequest"]}, ["blocking"]
-);
+if (zs_can_filter_responses) {
+    // Firefox: read response bodies straight from the request
+    browser.webRequest.onBeforeRequest.addListener(
+        zeeschuimer.listener, {urls: ["https://*/*"], types: ["main_frame", "xmlhttprequest"]}, ["blocking"]
+    );
+}
+
+/**
+ * Handle messages from the capture content scripts and the interface
+ *
+ * Chrome has no way to read response bodies from the background context, so
+ * there the content scripts in js/zs-capture-*.js capture them in the page and
+ * send them here. The interface uses this to find out which modules exist.
+ *
+ * Responses are sent via sendResponse() instead of by returning a promise,
+ * because Chrome does not support the latter.
+ */
+browser.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (!message || !message.type) {
+        return false;
+    }
+
+    if (message.type === 'zeeschuimer-modules') {
+        // module metadata for the interface page
+        let modules = {};
+        for (const module_id in zeeschuimer.modules) {
+            modules[module_id] = {
+                name: zeeschuimer.modules[module_id]['name'],
+                domain: zeeschuimer.modules[module_id]['domain']
+            };
+        }
+        sendResponse(modules);
+        return false;
+    }
+
+    if (message.type === 'zeeschuimer-capture-enabled') {
+        // capture content scripts use this to stay dormant while no module
+        // for the page they run in is enabled
+        zeeschuimer.get_enabled_modules(message.url, message.url)
+            .then(enabled_modules => sendResponse(enabled_modules.length > 0))
+            .catch(() => sendResponse(false));
+        return true;
+    }
+
+    if (message.type === 'zeeschuimer-capture') {
+        const tab_id = sender.tab ? sender.tab.id : -1;
+        const origin_url = message.origin_url || (sender.tab ? sender.tab.url : message.url);
+
+        self.zeeschuimer_ready
+            .then(() => zeeschuimer.get_enabled_modules(message.url, origin_url))
+            .then(async (enabled_modules) => {
+                if (enabled_modules.length > 0) {
+                    await zeeschuimer.parse_request(message.body, origin_url, message.url, tab_id, enabled_modules);
+                }
+                sendResponse({captured: enabled_modules.length > 0});
+            })
+            .catch(error => sendResponse({error: String(error)}));
+        return true;
+    }
+
+    return false;
+});
+
+// keep the browser icon in sync with the capture toggles in the interface
+browser.storage.onChanged.addListener(function (changes, area) {
+    if (area !== 'local') {
+        return;
+    }
+    if (Object.keys(changes).some(key => key.indexOf('zs-enabled-') === 0)) {
+        zeeschuimer.update_icon();
+    }
+});
 
 browser.webNavigation.onCommitted.addListener(
     zeeschuimer.nav_handler
 );
 
-browser.browserAction.onClicked.addListener(async () => {
+zs_action.onClicked.addListener(async () => {
     let tab = await zeeschuimer.has_tab();
     if (!tab) {
         browser.tabs.create({url: 'popup/interface.html'});
