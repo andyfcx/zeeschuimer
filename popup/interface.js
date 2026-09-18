@@ -273,9 +273,9 @@ async function update_capture_status() {
         return without_protocol.length > 60 ? without_protocol.slice(0, 60) + '\u2026' : without_protocol;
     };
 
-    let text = 'Capturing from ' + stats.attached_tabs + ' tab(s): ' + stats.responses +
-        ' response(s) seen, ' + stats.responses_matched + ' from enabled platforms, ' +
-        stats.items + ' item(s) stored';
+    let text = 'Capturing with ' + (stats.mechanism || 'an unknown mechanism') + ': ' +
+        stats.attached_tabs + ' tab(s) attached, ' + stats.responses + ' response(s) seen, ' +
+        stats.responses_matched + ' from enabled platforms, ' + stats.items + ' item(s) stored';
     const last_url = stats.last_match_url || stats.last_url;
     if(last_url) {
         text += ' \u2014 last: ' + shorten(last_url);

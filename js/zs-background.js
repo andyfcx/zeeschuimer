@@ -19,7 +19,8 @@ self.zeeschuimer = {
         last_url: null,
         last_match_url: null,
         attached_tabs: 0,
-        last_error: null
+        last_error: null,
+        mechanism: null
     },
 
     /**
@@ -326,6 +327,9 @@ self.zeeschuimer = {
 // especially happens in Chrome, where the background context is started on
 // demand; everything that needs a session index waits for this promise
 self.zeeschuimer_ready = zeeschuimer.init();
+
+// js/zs-capture-debugger.js overrules this if it cannot do its work
+zeeschuimer.capture_stats.mechanism = zs_can_filter_responses ? 'the request filter' : 'the debugger API';
 
 if (zs_can_filter_responses) {
     // Firefox: read response bodies straight from the request

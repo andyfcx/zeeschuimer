@@ -19,7 +19,17 @@
 (function (global) {
     const browser = global.browser;
 
-    if (global.zs_can_filter_responses || !browser || !browser.debugger) {
+    if (global.zs_can_filter_responses) {
+        // Firefox reads response bodies from the request itself
+        return;
+    }
+
+    if (!browser || !browser.debugger) {
+        // without the debugging permission there is no way to read a response
+        // body in Chrome at all, so say so rather than capture nothing quietly
+        zeeschuimer.capture_stats.mechanism = 'nothing: the debugging permission is missing';
+        zeeschuimer.capture_stats.last_error = 'Remove Zeeschuimer in chrome://extensions and load it again to ' +
+            'grant the debugging permission it needs to capture.';
         return;
     }
 
