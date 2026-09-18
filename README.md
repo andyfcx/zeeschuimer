@@ -54,9 +54,13 @@ Chrome needs a manifest v3 version of the extension, which is built from the sam
 ./build-chrome.sh
 ```
 
-This writes an unpacked extension to `dist/chrome` and a zip file for distribution. To install the unpacked version, go 
-to `chrome://extensions`, switch on 'Developer mode', click 'Load unpacked' and select the `dist/chrome` folder. Chrome 
-111 or later is required. This also works in other Chromium-based browsers, such as Edge and Brave.
+This assembles the extension in `dist/chrome`, as symlinks back to the source files. To install it, go to 
+`chrome://extensions`, switch on 'Developer mode', click 'Load unpacked' and select the `dist/chrome` folder. Chrome 111 
+or later is required. This also works in other Chromium-based browsers, such as Edge and Brave.
+
+Because the assembled extension points at the source files, it only has to be loaded once: after editing the source, 
+pressing 'Reload' on the extension in `chrome://extensions` is enough. The script only needs to be run again when a file 
+is added or removed. For a self-contained copy and a zip file to distribute, run `./build-chrome.sh --package`.
 
 Capture works differently in Chrome. Chrome extensions cannot read response bodies from the browser's own networking 
 API, and reading them in the page instead does not work either: a script injected into a page's own context is subject 
