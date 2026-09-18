@@ -9,6 +9,7 @@ self.db.version(1).stores({
 self.zeeschuimer = {
     modules: {},
     session: null,
+    init_error: null,
     tab_url_map: {},
 
     // diagnostics, reset whenever the background context starts
@@ -47,17 +48,24 @@ self.zeeschuimer = {
      * Called on browser session start; increases session index to aid in deduplicating extracted items.
      */
     init: async function () {
-        let session;
-        session = await db.settings.get("session");
-        if (!session) {
-            session = {"key": "session", "value": 0};
-            await db.settings.add(session);
-        }
+        try {
+            let session;
+            session = await db.settings.get("session");
+            if (!session) {
+                session = {"key": "session", "value": 0};
+                await db.settings.add(session);
+            }
 
-        session["value"] += 1;
-        this.session = session["value"];
-        await db.settings.update("session", session);
-        await db.nav.where("session").notEqual(this.session).delete();
+            session["value"] += 1;
+            this.session = session["value"];
+            await db.settings.update("session", session);
+            await db.nav.where("session").notEqual(this.session).delete();
+        } catch (error) {
+            // capture is more important than the session bookkeeping that
+            // helps deduplicate items, so carry on with a session of its own
+            this.init_error = String(error && error.message ? error.message : error);
+            this.session = Math.floor(Date.now() / 1000);
+        }
 
         // synchronise browser icon with whether capture is enabled or not
         await this.update_icon();
@@ -154,6 +162,42 @@ self.zeeschuimer = {
         }
 
         return {};
+    },
+
+    /**
+     * Collect everything the interface needs to show what capture is doing
+     *
+     * @returns {Promise<Object>}
+     */
+    get_capture_diagnostics: async function () {
+        const diagnostics = Object.assign({}, this.capture_stats);
+        diagnostics.session = this.session;
+        diagnostics.init_error = this.init_error;
+
+        diagnostics.enabled_modules = [];
+        for (const module_id in this.modules) {
+            if (await this.module_is_enabled(module_id)) {
+                diagnostics.enabled_modules.push(module_id);
+            }
+        }
+
+        diagnostics.capturable_tabs = [];
+        try {
+            const tabs = await browser.tabs.query({});
+            for (const tab of tabs) {
+                if (!tab.url || tab.url.indexOf('http') !== 0) {
+                    continue;
+                }
+                const enabled_modules = await this.get_enabled_modules(tab.url, tab.url);
+                if (enabled_modules.length > 0) {
+                    diagnostics.capturable_tabs.push(tab.url.split('://').pop().split('/')[0]);
+                }
+            }
+        } catch (error) {
+            diagnostics.tabs_error = String(error && error.message ? error.message : error);
+        }
+
+        return diagnostics;
     },
 
     /**
@@ -367,8 +411,11 @@ browser.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     if (message.type === 'zeeschuimer-capture-stats') {
         // diagnostics for the interface
-        sendResponse(zeeschuimer.capture_stats);
-        return false;
+        zeeschuimer.get_capture_diagnostics()
+            .then(sendResponse)
+            .catch(error => sendResponse(Object.assign({}, zeeschuimer.capture_stats,
+                {last_error: String(error && error.message ? error.message : error)})));
+        return true;
     }
 
     return false;

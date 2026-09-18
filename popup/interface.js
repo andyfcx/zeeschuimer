@@ -284,7 +284,19 @@ async function update_capture_status() {
         text += ' \u2014 ' + stats.last_error;
     }
 
-    container.innerText = text;
+    const details = [
+        'enabled: ' + (stats.enabled_modules && stats.enabled_modules.length ? stats.enabled_modules.join(', ') : 'none'),
+        'capturable tabs: ' + (stats.capturable_tabs && stats.capturable_tabs.length ? stats.capturable_tabs.join(', ') : 'none'),
+        'session: ' + stats.session
+    ];
+    if(stats.init_error) {
+        details.push('start-up error: ' + stats.init_error);
+    }
+    if(stats.tabs_error) {
+        details.push('tab error: ' + stats.tabs_error);
+    }
+
+    container.innerText = text + '\n' + details.join(' \u2014 ');
     container.setAttribute('aria-hidden', 'false');
 }
 

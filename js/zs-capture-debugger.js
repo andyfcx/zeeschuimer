@@ -136,13 +136,18 @@
             return;
         }
 
-        await global.zeeschuimer_ready;
-        const enabled_modules = await zeeschuimer.get_enabled_modules(url, url);
+        try {
+            await global.zeeschuimer_ready;
+            const enabled_modules = await zeeschuimer.get_enabled_modules(url, url);
 
-        if (enabled_modules.length > 0) {
-            await attach(tab_id);
-        } else {
-            await detach(tab_id);
+            if (enabled_modules.length > 0) {
+                await attach(tab_id);
+            } else {
+                await detach(tab_id);
+            }
+        } catch (error) {
+            zeeschuimer.capture_stats.last_error = 'Could not start capturing in a tab: ' +
+                String(error && error.message ? error.message : error);
         }
     }
 
@@ -243,7 +248,12 @@
             // tab is gone; fall back to the response's own URL
         }
 
-        await zeeschuimer.handle_capture(body, document_url, origin_url, tab_id);
+        try {
+            await zeeschuimer.handle_capture(body, document_url, origin_url, tab_id);
+        } catch (error) {
+            zeeschuimer.capture_stats.last_error = 'Could not process a captured response: ' +
+                String(error && error.message ? error.message : error);
+        }
     });
 
     browser.debugger.onDetach.addListener(function (source, reason) {
