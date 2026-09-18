@@ -250,8 +250,8 @@
             }
 
             result_data.push({
-                post_id: data.id,
-                post_url: item.source_platform_url,
+                post_id: data.id !== undefined ? data.id : null,
+                post_url: item.source_platform_url !== undefined ? item.source_platform_url : null,
                 creation_time: format_timestamp(data.createTime || 0),
                 attachments: attachments,
                 text: data.desc || "",
@@ -399,7 +399,8 @@
                 post_id: post_id,
                 post_url: author.handle && post_id
                     ? "https://x.com/" + author.handle + "/status/" + post_id
-                    : (post_id ? "https://x.com/i/status/" + post_id : item.source_platform_url),
+                    : (post_id ? "https://x.com/i/status/" + post_id
+                        : (item.source_platform_url !== undefined ? item.source_platform_url : null)),
                 creation_time: tweet.created_at ? format_date(new Date(tweet.created_at)) : "Unknown",
                 attachments: twitter_attachments(source),
                 text: text,
@@ -497,7 +498,7 @@
                 post_id: String(post.pk || post.id || ""),
                 post_url: code
                     ? "https://www.threads.com/@" + (source_author.username || "") + "/post/" + code
-                    : item.source_platform_url,
+                    : (item.source_platform_url !== undefined ? item.source_platform_url : null),
                 creation_time: post.taken_at ? format_timestamp(post.taken_at) : "Unknown",
                 attachments: threads_attachments(source),
                 text: (source.caption && source.caption.text) ? source.caption.text : "",
