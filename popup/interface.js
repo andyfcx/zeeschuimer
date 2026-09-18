@@ -17,6 +17,10 @@ var platform_modules = null;
 // whether the parsed .csv/.json download buttons are offered; on by default
 var parse_export_enabled = true;
 
+// number of capture toggles being written to storage right now; while a write
+// is in flight the switches are left alone, so they do not flip back and forth
+var toggle_writes_pending = 0;
+
 var have_4cat = false;
 var xhr;
 var is_uploading = false;
@@ -169,12 +173,26 @@ function activate_buttons() {
  */
 async function toggle_listening(e) {
     let platform = e.target.getAttribute('name');
-    let now = await browser.storage.local.get([platform]);
-    let current = !!parseInt(now[platform]);
-    let updated = current ? 0 : 1;
+    let updated = e.target.checked ? 1 : 0;
     e.target.parentNode.parentNode.parentNode.parentNode.setAttribute('data-enabled', updated);
 
-    await browser.storage.local.set({[platform]: String(updated)});
+    toggle_writes_pending += 1;
+    try {
+        await browser.storage.local.set({[platform]: String(updated)});
+
+        // make sure it was really stored: a switch that says capture is on
+        // while it is not would be worse than an error message
+        const stored = await browser.storage.local.get([platform]);
+        if(!stored.hasOwnProperty(platform) || parseInt(stored[platform]) !== updated) {
+            throw new Error('the browser did not store the setting');
+        }
+    } catch (error) {
+        e.target.checked = !updated;
+        e.target.parentNode.parentNode.parentNode.parentNode.setAttribute('data-enabled', updated ? 0 : 1);
+        alert('Could not ' + (updated ? 'enable' : 'disable') + ' capture for ' + platform + ': ' + error);
+    } finally {
+        toggle_writes_pending -= 1;
+    }
 }
 
 
@@ -284,7 +302,11 @@ async function update_capture_status() {
         text += ' \u2014 ' + stats.last_error;
     }
 
+    const stored_toggles = stats.stored_toggles ? Object.keys(stats.stored_toggles)
+        .map(key => key.replace('zs-enabled-', '') + '=' + stats.stored_toggles[key]) : [];
+
     const details = [
+        'stored switches: ' + (stored_toggles.length ? stored_toggles.join(', ') : 'none'),
         'enabled: ' + (stats.enabled_modules && stats.enabled_modules.length ? stats.enabled_modules.join(', ') : 'none'),
         'capturable tabs: ' + (stats.capturable_tabs && stats.capturable_tabs.length ? stats.capturable_tabs.join(', ') : 'none'),
         'session: ' + stats.session
@@ -295,8 +317,17 @@ async function update_capture_status() {
     if(stats.tabs_error) {
         details.push('tab error: ' + stats.tabs_error);
     }
+    if(stats.storage_error) {
+        details.push('storage error: ' + stats.storage_error);
+    }
 
-    container.innerText = text + '\n' + details.join(' \u2014 ');
+    // the details are only worth showing when something is off: an error, or
+    // a platform that capture is enabled for without a tab being captured
+    const enabled_count = stats.enabled_modules ? stats.enabled_modules.length : 0;
+    const looks_idle = enabled_count > 0 && stats.attached_tabs === 0;
+    const has_error = !!(stats.last_error || stats.init_error || stats.tabs_error || stats.storage_error);
+
+    container.innerText = (looks_idle || has_error) ? text + '\n' + details.join(' \u2014 ') : text;
     container.setAttribute('aria-hidden', 'false');
 }
 
@@ -377,8 +408,24 @@ async function get_stats() {
 
             row.appendChild(actions);
             document.querySelector("#item-table tbody").appendChild(row);
-        } else if(new_num_items !== parseInt(document.querySelector("#" + row_id + " .num-items").innerText)) {
-            document.querySelector("#" + row_id + " .num-items").innerText = new Intl.NumberFormat().format(new_num_items);
+        } else {
+            if(new_num_items !== parseInt(document.querySelector("#" + row_id + " .num-items").innerText)) {
+                document.querySelector("#" + row_id + " .num-items").innerText = new Intl.NumberFormat().format(new_num_items);
+            }
+
+            if(!toggle_writes_pending) {
+                // the switch shows what is stored, not what it was set to at
+                // some point: a setting that did not get stored must not look
+                // like capture is enabled
+                let toggle_field = 'zs-enabled-' + platform;
+                let stored = await browser.storage.local.get([toggle_field]);
+                let enabled = stored.hasOwnProperty(toggle_field) && !!parseInt(stored[toggle_field]);
+                let checkbox = document.getElementById(toggle_field);
+                if(checkbox && checkbox.checked !== enabled) {
+                    checkbox.checked = enabled;
+                }
+                document.querySelector("#" + row_id).setAttribute('data-enabled', enabled ? '1' : '0');
+            }
         }
     }
 

@@ -174,6 +174,20 @@ self.zeeschuimer = {
         diagnostics.session = this.session;
         diagnostics.init_error = this.init_error;
 
+        // the raw toggles as stored, which is what the interface's switches are
+        // supposed to reflect
+        diagnostics.stored_toggles = {};
+        try {
+            const stored = await browser.storage.local.get(null);
+            for (const key of Object.keys(stored)) {
+                if (key.indexOf('zs-enabled-') === 0) {
+                    diagnostics.stored_toggles[key] = stored[key];
+                }
+            }
+        } catch (error) {
+            diagnostics.storage_error = String(error && error.message ? error.message : error);
+        }
+
         diagnostics.enabled_modules = [];
         for (const module_id in this.modules) {
             if (await this.module_is_enabled(module_id)) {

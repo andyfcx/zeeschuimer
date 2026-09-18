@@ -74,7 +74,11 @@ scripts under. Chrome therefore captures through the same protocol the developer
   that tab; the interface says so, and closing the developer tools and reloading the page resumes it.
 
 The interface shows how many tabs are being captured from and how much has been captured, so you can tell capture is 
-working before exporting. Everything else, including the exports, is identical to Firefox.
+working before exporting, and explains itself when it is capturing nothing. Everything else, including the exports, is 
+identical to Firefox.
+
+Note that removing the extension in `chrome://extensions` also clears its settings, so after loading it again capture is 
+switched off for every platform. Pressing 'Reload' on the extension keeps them.
 
 ## How to use
 A [guide to using Zeeschuimer and 4CAT](https://zeeschuimer.4cat.nl/) is available. Basic instructions 
