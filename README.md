@@ -17,7 +17,9 @@ into your own analysis pipeline.
 
 Currently, it supports the following platforms:
 * [TikTok](https://www.tiktok.com) (posts and comments)
+* [Facebook](https://www.facebook.com) (posts only)
 * [Instagram](https://www.instagram.com) (posts only)
+* [Threads](https://www.threads.com)
 * [X/Twitter](https://www.x.com)
 * [LinkedIn](https://www.linkedin.com)
 * [9gag](https://9gag.com)
@@ -37,10 +39,46 @@ explicitly ask it to do so. It uses the
 locally collect and parse the data search engines are sending to your browser as you use it.
 
 ## Installation
+
+### Firefox
 Zeeschuimer is in active development. .xpi files that you can use to install it in your browser are available on the 
 [releases](https://github.com/digitalmethodsinitiative/zeeschuimer/releases) page. These are signed and can be installed 
 in any Firefox-based browser. If you want to run the latest development version instead, you can [do so from the Firefox
 debugging console](https://www.youtube.com/watch?v=J7el77F1ckg) after cloning the repository locally.
+
+### Chrome
+Chrome needs a manifest v3 version of the extension, which is built from the same source with a separate manifest 
+(`manifest-chrome.json`). After cloning the repository, run:
+
+```
+./build-chrome.sh
+```
+
+This assembles the extension in `dist/chrome`, as symlinks back to the source files. To install it, go to 
+`chrome://extensions`, switch on 'Developer mode', click 'Load unpacked' and select the `dist/chrome` folder. Chrome 111 
+or later is required. This also works in other Chromium-based browsers, such as Edge and Brave.
+
+Because the assembled extension points at the source files, it only has to be loaded once: after editing the source, 
+pressing 'Reload' on the extension in `chrome://extensions` is enough. The script only needs to be run again when a file 
+is added or removed. For a self-contained copy and a zip file to distribute, run `./build-chrome.sh --package`.
+
+Capture works differently in Chrome. Chrome extensions cannot read response bodies from the browser's own networking 
+API, and reading them in the page instead does not work either: a script injected into a page's own context is subject 
+to that page's content security policy, which the supported platforms (Facebook in particular) do not allow extension 
+scripts under. Chrome therefore captures through the same protocol the developer tools use, which has two consequences:
+
+* Chrome asks for permission to 'debug' pages when the extension is installed, and shows a notification bar 
+  ('Zeeschuimer started debugging this browser') in tabs that capture is active in. The bar appears only for tabs 
+  showing a platform that capture is switched on for.
+* The developer tools cannot be used in a tab while capture is active in it. If you open them anyway, capture stops for 
+  that tab; the interface says so, and closing the developer tools and reloading the page resumes it.
+
+The interface shows how many tabs are being captured from and how much has been captured, so you can tell capture is 
+working before exporting, and explains itself when it is capturing nothing. Everything else, including the exports, is 
+identical to Firefox.
+
+Note that removing the extension in `chrome://extensions` also clears its settings, so after loading it again capture is 
+switched off for every platform. Pressing 'Reload' on the extension keeps them.
 
 ## How to use
 A [guide to using Zeeschuimer and 4CAT](https://zeeschuimer.4cat.nl/) is available. Basic instructions 
@@ -70,6 +108,30 @@ when you've scrolled down enough to be satisfied with the amount of items.
 If you find yourself scrolling a lot to collect data, consider using another browser extension to do it for you, for 
 example [FoxScroller](https://addons.mozilla.org/en-US/firefox/addon/foxscroller/).
 
+### Parsed downloads
+The raw ndjson export contains everything the platform sent, which is a lot more than most analyses need. With the 
+'Offer parsed downloads' switch (on by default) each platform also gets 'parsed .csv' and 'parsed .json' buttons. These 
+reduce every item to a flat row and remove duplicate posts:
+
+| Platform | Fields |
+|----------|--------|
+| Facebook | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `total_reaction_count`, `reactions`, `comment_count`, `share_count` |
+| TikTok | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `author_name`, `author_id`, `like_count`, `comment_count`, `share_count`, `play_count` |
+| X/Twitter | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `author_name`, `author_id`, `like_count`, `retweet_count`, `reply_count`, `quote_count`, `view_count`, `retweeted_from`, `promoted` |
+| Threads | `post_id`, `post_url`, `creation_time`, `attachments`, `text`, `author_name`, `author_id`, `like_count`, `reply_count`, `repost_count`, `reposted_from` |
+
+The Facebook and TikTok parsers are ports of the ones in the 
+[zs-parser](https://github.com/andyfcx/zs-parser) command line tool, so their output is interchangeable with it; the 
+X/Twitter and Threads parsers only exist here. Other platforms fall back to the Facebook parser, as the command line 
+tool does; for those, the raw ndjson export is usually the better choice.
+
+A retweet's or repost's own text is empty or cut off, so the text, media and engagement counts of the post that was 
+retweeted or reposted are used, while `author_name` and `author_id` stay whoever retweeted or reposted it and 
+`retweeted_from`/`reposted_from` name the original author. Tweets longer than 280 characters keep their full text, and 
+for a video the highest quality variant is listed as the attachment. The .csv file is written with a byte order mark so that spreadsheet software recognises it as 
+UTF-8, and lists (attachments, reactions) are joined with '; ' in a single column. Switching the option off hides the 
+buttons again; the setting is remembered.
+
 ## Limitations
 
 Due to the technical limitations, it may not be possible to collect all items from all 'views' for each supported 
@@ -83,6 +145,9 @@ platform. The following limitations are known:
   * 'Suggested for you' and 'Sponsored' posts on the front page feed
 * *TikTok* items that cannot be captured:
   * Live streams
+* In *Chrome*, capture only runs in tabs the extension is attached to, which it does when a tab navigates to a platform 
+  that capture is switched on for. Responses a tab loaded before that (for example when you switch a platform on while 
+  its page is already open) are not captured; reloading the page captures them.
 
 For some platforms, the level of detail of the data that can be collected depends on the page it is captured from:
 

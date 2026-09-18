@@ -2,7 +2,6 @@
 <head>
     <title>Zeeschuimer</title>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <meta http-equiv="Content-Security-Policy" content="script-src *;">
     <link rel="stylesheet" href="tooltips.css">
     <link rel="stylesheet" href="fontawesome/css/all.css">
     <!--<script src="../js/webtorrent.min.js"></script>
@@ -371,6 +370,38 @@
             animation: move 2s linear infinite;
         }
 
+        .parse-export-switch {
+            text-align: center;
+            margin: 0 0 0.5em 0;
+        }
+
+        .parse-export-switch > label {
+            cursor: pointer;
+        }
+
+        .parse-export-switch .toggle-switch {
+            vertical-align: middle;
+        }
+
+        body[data-parse-export='0'] .parsed-export {
+            display: none;
+        }
+
+        #capture-status {
+            text-align: center;
+            font-size: 0.8em;
+            margin: 0 0 1em 0;
+            opacity: 0.8;
+            white-space: pre-line;
+        }
+
+        #parse-status {
+            text-align: center;
+            font-size: 0.8em;
+            margin: 0 0 1em 0;
+            min-height: 1em;
+        }
+
         @keyframes move {
             from { background-position-x: -15px; }
             to { background-position-x: 75px; }
@@ -400,6 +431,19 @@
             </table>
             <button class="reset-all"><i class="fa fa-times"></i> Delete all items</button>
         </div>
+        <div class="parse-export-switch">
+            <label for="zs-parse-export">Offer parsed downloads</label>
+            <div class="toggle-switch">
+                <label for="zs-parse-export">
+                    <input type="checkbox" id="zs-parse-export" name="zs-parse-export">
+                    <span class="toggle"></span>
+                </label>
+            </div>
+            <span class="tooltippable"
+                  title="Adds 'parsed .csv' and 'parsed .json' buttons per platform. These downloads contain the collected items reduced to the most relevant fields (post ID, URL, date, text, attachments, engagement metrics), deduplicated by post, as produced by zs-parser. Facebook and TikTok have dedicated parsers; other platforms fall back to the Facebook one.">?</span>
+        </div>
+        <p id="parse-status"></p>
+        <p id="capture-status" aria-hidden="true"></p>
     </section>
     <section id="configuration">
         <h2><span>Connect to 4CAT</span></h2>
@@ -450,6 +494,9 @@
         </ul>
     </nav>
 </footer>
+<script type="text/javascript" src="../js/compat.js"></script>
+<script type="text/javascript" src="../inc/dexie.js"></script>
+<script type="text/javascript" src="../js/zs-parser.js"></script>
 <script type="text/javascript" src="tooltips.js"></script>
 <script type="text/javascript" src="interface.js"></script>
 </body>

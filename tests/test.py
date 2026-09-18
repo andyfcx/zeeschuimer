@@ -147,7 +147,7 @@ for platform, testcases in tests.items():
     driver.switch_to.window(handles[0])
     # disable all
     driver.execute_script(
-        "document.querySelectorAll('.toggle-switch input').forEach((e) => { if(e.checked) { e.click() }; });")
+        "document.querySelectorAll('#item-table .toggle-switch input').forEach((e) => { if(e.checked) { e.click() }; });")
     # enable current platform
     driver.execute_script("document.querySelectorAll('#zs-enabled-" + platform.replace(".",
                                                                                        "\\\\.") + "').forEach((e) => { if(!e.checked) { e.click(); }}); ")

@@ -1,4 +1,26 @@
-const background = browser.extension.getBackgroundPage();
+/**
+ * The interface opens the item database itself instead of going through the
+ * background context; Chrome's service worker cannot hand out references to
+ * its objects the way Firefox's background page can.
+ */
+const db = new Dexie('zeeschuimer-items');
+db.version(1).stores({
+    items: "++id, item_id, nav_index, source_platform",
+    uploads: "++id",
+    nav: "++id, tab_id, session",
+    settings: "key"
+});
+
+// module metadata (name, domain), requested from the background context
+var platform_modules = null;
+
+// whether the parsed .csv/.json download buttons are offered; on by default
+var parse_export_enabled = true;
+
+// number of capture toggles being written to storage right now; while a write
+// is in flight the switches are left alone, so they do not flip back and forth
+var toggle_writes_pending = 0;
+
 var have_4cat = false;
 var xhr;
 var is_uploading = false;
@@ -63,7 +85,7 @@ function createElement(tag, attributes={}, content=undefined, prepend_icon=undef
  * @returns {Promise<*>}
  */
 async function get_4cat_url(e) {
-    let url = await background.browser.storage.local.get(['4cat-url']);
+    let url = await browser.storage.local.get(['4cat-url']);
     if (url['4cat-url']) {
         url = url['4cat-url'];
     } else {
@@ -95,9 +117,9 @@ async function set_4cat_url(e) {
             }
             url = url.split('/').slice(0, 3).join('/');
         }
-        await background.browser.storage.local.set({'4cat-url': url});
+        await browser.storage.local.set({'4cat-url': url});
     } else {
-        url = await background.browser.storage.local.get(['4cat-url']);
+        url = await browser.storage.local.get(['4cat-url']);
         if(url['4cat-url']) {
             url = url['4cat-url'];
         } else {
@@ -131,7 +153,7 @@ function activate_buttons() {
                 button.setAttribute('title', '');
             }
 
-        } else if(button.classList.contains('download-ndjson') || button.classList.contains('download-csv') || button.classList.contains('reset')) {
+        } else if(button.classList.contains('download-ndjson') || button.classList.contains('parsed-export') || button.classList.contains('reset')) {
             new_status = !(items > 0);
         }
 
@@ -151,12 +173,26 @@ function activate_buttons() {
  */
 async function toggle_listening(e) {
     let platform = e.target.getAttribute('name');
-    let now = await background.browser.storage.local.get([platform]);
-    let current = !!parseInt(now[platform]);
-    let updated = current ? 0 : 1;
+    let updated = e.target.checked ? 1 : 0;
     e.target.parentNode.parentNode.parentNode.parentNode.setAttribute('data-enabled', updated);
 
-    await background.browser.storage.local.set({[platform]: String(updated)});
+    toggle_writes_pending += 1;
+    try {
+        await browser.storage.local.set({[platform]: String(updated)});
+
+        // make sure it was really stored: a switch that says capture is on
+        // while it is not would be worse than an error message
+        const stored = await browser.storage.local.get([platform]);
+        if(!stored.hasOwnProperty(platform) || parseInt(stored[platform]) !== updated) {
+            throw new Error('the browser did not store the setting');
+        }
+    } catch (error) {
+        e.target.checked = !updated;
+        e.target.parentNode.parentNode.parentNode.parentNode.setAttribute('data-enabled', updated ? 0 : 1);
+        alert('Could not ' + (updated ? 'enable' : 'disable') + ' capture for ' + platform + ': ' + error);
+    } finally {
+        toggle_writes_pending -= 1;
+    }
 }
 
 
@@ -164,9 +200,135 @@ async function toggle_listening(e) {
  * Update favicon depending on whether capture is enabled
  */
 function update_icon() {
-    const any_enabled = Array.from(document.querySelectorAll('.toggle-switch input')).filter(item => item.checked);
+    const any_enabled = Array.from(document.querySelectorAll('#item-table .toggle-switch input')).filter(item => item.checked);
     const path = any_enabled.length > 0 ? '/images/zeeschuimer-icon-active.png' : '/images/zeeschuimer-icon-inactive.png';
     document.querySelector('link[rel~=icon]').setAttribute('href', path);
+}
+
+/**
+ * Load module metadata from the background context
+ *
+ * The interface needs to know which platforms exist and what they are called.
+ * In Chrome the background context is a service worker that may be asleep, in
+ * which case sending it a message wakes it up; if that fails the interface
+ * tries again on its next update.
+ *
+ * @returns {Promise<Object|null>}  Module metadata, or null if unavailable
+ */
+async function load_platform_modules() {
+    try {
+        const modules = await browser.runtime.sendMessage({type: 'zeeschuimer-modules'});
+        return (modules && Object.keys(modules).length > 0) ? modules : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Initialise the 'parsed data' switch
+ *
+ * When on, each platform gets buttons to download its items as a parsed file
+ * instead of as raw NDJSON. This is on unless it has been switched off before.
+ *
+ * @returns {Promise<void>}
+ */
+async function init_parse_export() {
+    const stored = await browser.storage.local.get('zs-parse-export');
+    parse_export_enabled = !stored.hasOwnProperty('zs-parse-export') || !!parseInt(stored['zs-parse-export']);
+
+    const checkbox = document.querySelector('#zs-parse-export');
+    checkbox.checked = parse_export_enabled;
+    checkbox.addEventListener('change', toggle_parse_export);
+    document.body.setAttribute('data-parse-export', parse_export_enabled ? '1' : '0');
+}
+
+/**
+ * Toggle availability of the parsed download buttons
+ *
+ * @param e
+ * @returns {Promise<void>}
+ */
+async function toggle_parse_export(e) {
+    parse_export_enabled = !!e.target.checked;
+    document.body.setAttribute('data-parse-export', parse_export_enabled ? '1' : '0');
+    await browser.storage.local.set({'zs-parse-export': parse_export_enabled ? '1' : '0'});
+}
+
+/**
+ * Show what capture is doing
+ *
+ * Only relevant where capture runs through the debugger API (i.e. in Chrome):
+ * it shows how many tabs are being captured from and what has been captured,
+ * which is otherwise impossible to tell apart from a platform simply not
+ * sending any items.
+ *
+ * @returns {Promise<void>}
+ */
+async function update_capture_status() {
+    const container = document.querySelector('#capture-status');
+    if(!container) {
+        return;
+    }
+
+    if(zs_can_filter_responses) {
+        container.setAttribute('aria-hidden', 'true');
+        return;
+    }
+
+    let stats;
+    try {
+        stats = await browser.runtime.sendMessage({type: 'zeeschuimer-capture-stats'});
+    } catch (e) {
+        return;
+    }
+
+    if(!stats) {
+        return;
+    }
+
+    const shorten = (url) => {
+        const without_protocol = String(url).split('://').pop();
+        return without_protocol.length > 60 ? without_protocol.slice(0, 60) + '\u2026' : without_protocol;
+    };
+
+    let text = 'Capturing with ' + (stats.mechanism || 'an unknown mechanism') + ': ' +
+        stats.attached_tabs + ' tab(s) attached, ' + stats.responses + ' response(s) seen, ' +
+        stats.responses_matched + ' from enabled platforms, ' + stats.items + ' item(s) stored';
+    const last_url = stats.last_match_url || stats.last_url;
+    if(last_url) {
+        text += ' \u2014 last: ' + shorten(last_url);
+    }
+    if(stats.last_error) {
+        text += ' \u2014 ' + stats.last_error;
+    }
+
+    const stored_toggles = stats.stored_toggles ? Object.keys(stats.stored_toggles)
+        .map(key => key.replace('zs-enabled-', '') + '=' + stats.stored_toggles[key]) : [];
+
+    const details = [
+        'stored switches: ' + (stored_toggles.length ? stored_toggles.join(', ') : 'none'),
+        'enabled: ' + (stats.enabled_modules && stats.enabled_modules.length ? stats.enabled_modules.join(', ') : 'none'),
+        'capturable tabs: ' + (stats.capturable_tabs && stats.capturable_tabs.length ? stats.capturable_tabs.join(', ') : 'none'),
+        'session: ' + stats.session
+    ];
+    if(stats.init_error) {
+        details.push('start-up error: ' + stats.init_error);
+    }
+    if(stats.tabs_error) {
+        details.push('tab error: ' + stats.tabs_error);
+    }
+    if(stats.storage_error) {
+        details.push('storage error: ' + stats.storage_error);
+    }
+
+    // the details are only worth showing when something is off: an error, or
+    // a platform that capture is enabled for without a tab being captured
+    const enabled_count = stats.enabled_modules ? stats.enabled_modules.length : 0;
+    const looks_idle = enabled_count > 0 && stats.attached_tabs === 0;
+    const has_error = !!(stats.last_error || stats.init_error || stats.tabs_error || stats.storage_error);
+
+    container.innerText = (looks_idle || has_error) ? text + '\n' + details.join(' \u2014 ') : text;
+    container.setAttribute('aria-hidden', 'false');
 }
 
 /**
@@ -179,11 +341,20 @@ function update_icon() {
  * @returns {Promise<void>}
  */
 async function get_stats() {
+    if(!platform_modules) {
+        // the background context may not have started yet, in which case we
+        // simply try again on the next update
+        platform_modules = await load_platform_modules();
+        if(!platform_modules) {
+            return;
+        }
+    }
+
     let response = [];
     let platform_map = [];
-    Object.keys(background.zeeschuimer.modules).forEach(function(platform) { platform_map[platform] = background.zeeschuimer.modules[platform].name; });
-    for(let module in background.zeeschuimer.modules) {
-        response[module] = await background.db.items.where("source_platform").equals(module).count();
+    Object.keys(platform_modules).forEach(function(platform) { platform_map[platform] = platform_modules[platform].name; });
+    for(let module in platform_modules) {
+        response[module] = await db.items.where("source_platform").equals(module).count();
     }
 
     for (let platform in response) {
@@ -191,7 +362,7 @@ async function get_stats() {
         let new_num_items = parseInt(response[platform]);
         if(!document.querySelector("#" + row_id)) {
             let toggle_field = 'zs-enabled-' + platform;
-            let enabled = await background.browser.storage.local.get([toggle_field])
+            let enabled = await browser.storage.local.get([toggle_field])
             enabled = enabled.hasOwnProperty(toggle_field) && !!parseInt(enabled[toggle_field]);
             let row = createElement("tr", {"id": row_id, 'data-enabled': enabled ? '1' : '0'});
 
@@ -204,7 +375,7 @@ async function get_stats() {
 
             row.appendChild(createElement("td", {'class': 'platform-icon'}, createElement('img', {'src': '/images/platform-icons/' + platform.split('.')[0].split('-')[0] + '.png', 'alt': ''})));
             row.appendChild(createElement("td", {}, createElement('div', {'class': 'toggle-switch'}, checker)));
-            row.appendChild(createElement("td", {}, createElement('a', {'href': 'https://' + background.zeeschuimer.modules[platform]['domain']}, platform_map[platform])));
+            row.appendChild(createElement("td", {}, createElement('a', {'href': 'https://' + platform_modules[platform]['domain']}, platform_map[platform])));
             row.appendChild(createElement("td", {"class": "num-items"}, new Intl.NumberFormat().format(response[platform])));
 
             let actions = createElement("td");
@@ -218,26 +389,48 @@ async function get_stats() {
                 "class": "upload-to-4cat",
             }, "to 4CAT");
 
+            let parsed_csv_button = createElement("button", {
+                "data-platform": platform,
+                "class": "download-parsed-csv parsed-export tooltippable",
+                "title": "Download the collected items as a parsed, flattened CSV file"
+            }, "parsed .csv");
+            let parsed_json_button = createElement("button", {
+                "data-platform": platform,
+                "class": "download-parsed-json parsed-export tooltippable",
+                "title": "Download the collected items as a parsed, flattened JSON file"
+            }, "parsed .json");
+
             actions.appendChild(clear_button);
             actions.appendChild(download_button);
-            if (platform === 'Facebook (posts)') {
-                let csv_button = createElement("button", {
-                    "data-platform": platform,
-                    "class": "download-csv"
-                }, ".csv");
-                actions.appendChild(csv_button);
-            }
+            actions.appendChild(parsed_csv_button);
+            actions.appendChild(parsed_json_button);
             actions.appendChild(fourcat_button);
 
             row.appendChild(actions);
             document.querySelector("#item-table tbody").appendChild(row);
-        } else if(new_num_items !== parseInt(document.querySelector("#" + row_id + " .num-items").innerText)) {
-            document.querySelector("#" + row_id + " .num-items").innerText = new Intl.NumberFormat().format(new_num_items);
+        } else {
+            if(new_num_items !== parseInt(document.querySelector("#" + row_id + " .num-items").innerText)) {
+                document.querySelector("#" + row_id + " .num-items").innerText = new Intl.NumberFormat().format(new_num_items);
+            }
+
+            if(!toggle_writes_pending) {
+                // the switch shows what is stored, not what it was set to at
+                // some point: a setting that did not get stored must not look
+                // like capture is enabled
+                let toggle_field = 'zs-enabled-' + platform;
+                let stored = await browser.storage.local.get([toggle_field]);
+                let enabled = stored.hasOwnProperty(toggle_field) && !!parseInt(stored[toggle_field]);
+                let checkbox = document.getElementById(toggle_field);
+                if(checkbox && checkbox.checked !== enabled) {
+                    checkbox.checked = enabled;
+                }
+                document.querySelector("#" + row_id).setAttribute('data-enabled', enabled ? '1' : '0');
+            }
         }
     }
 
-    let uploads = await background.db.uploads.orderBy("id").reverse().limit(10);
-    let num_uploads = parseInt(await background.db.uploads.orderBy("id").limit(10).count());
+    let uploads = await db.uploads.orderBy("id").reverse().limit(10);
+    let num_uploads = parseInt(await db.uploads.orderBy("id").limit(10).count());
 
     if(num_uploads > 0 && !document.querySelector('#clear-history')) {
         document.querySelector('#upload-table').parentNode.appendChild(createElement('button', {id: 'clear-history'}, 'Clear history'));
@@ -253,7 +446,7 @@ async function get_stats() {
                 document.querySelector('#upload-table .empty-table-notice').remove();
             }
             let row = createElement("tr", {"id": row_id});
-            row.appendChild(createElement("td", {}, background.zeeschuimer.modules[upload.platform]["name"]));
+            row.appendChild(createElement("td", {}, platform_modules[upload.platform]["name"]));
             row.appendChild(createElement("td", {}, new Intl.NumberFormat().format(upload.items)));
             row.appendChild(createElement("td", {}, (new Date(upload.timestamp)).toLocaleString('en-us', {
                 weekday: "long",
@@ -267,6 +460,7 @@ async function get_stats() {
     });
 
     set_4cat_url(true);
+    await update_capture_status();
     activate_buttons();
     update_icon();
     init_tooltips();
@@ -287,43 +481,32 @@ async function button_handler(event) {
 
     if (event.target.matches('.reset')) {
         let platform = event.target.getAttribute('data-platform');
-        await background.db.items.where("source_platform").equals(platform).delete();
+        await db.items.where("source_platform").equals(platform).delete();
 
     } else if (event.target.matches('.reset-all')) {
-        await background.db.items.clear();
+        await db.items.clear();
 
     } else if (event.target.matches('.download-ndjson')) {
         let platform = event.target.getAttribute('data-platform');
-        let date = new Date();
         event.target.classList.add('loading');
 
-        //let blob = await download_blob(platform, 'zeeschuimer-export-' + platform + '-' + date.toISOString().split(".")[0].replace(/:/g, "") + '.ndjson');
+        //let blob = await download_blob(platform, export_filename(platform, '', 'ndjson'));
         let blob = await get_blob(platform);
-        let filename = 'zeeschuimer-export-' + platform + '-' + date.toISOString().split(".")[0].replace(/:/g, "") + '.ndjson';
-        const downloadUrl = window.URL.createObjectURL(blob);
-        const downloadId = await browser.downloads.download({
-            url: window.URL.createObjectURL(blob),
-            filename: filename,
-            conflictAction: 'uniquify'
-        });
-        downloadUrls.set(downloadId, downloadUrl);
+        await download_file(blob, export_filename(platform, '', 'ndjson'));
 
         event.target.classList.remove('loading');
 
-    } else if (event.target.matches('.download-csv')) {
+    } else if (event.target.matches('.download-parsed-csv') || event.target.matches('.download-parsed-json')) {
         let platform = event.target.getAttribute('data-platform');
-        let date = new Date();
+        let format = event.target.matches('.download-parsed-csv') ? 'csv' : 'json';
         event.target.classList.add('loading');
 
-        let blob = await get_facebook_csv_blob(platform);
-        let filename = 'zeeschuimer-export-' + platform + '-' + date.toISOString().split(".")[0].replace(/:/g, "") + '.csv';
-        const csvUrl = window.URL.createObjectURL(blob);
-        const downloadId = await browser.downloads.download({
-            url: csvUrl,
-            filename: filename,
-            conflictAction: 'uniquify'
-        });
-        downloadUrls.set(downloadId, csvUrl);
+        try {
+            let blob = await get_parsed_blob(platform, format);
+            await download_file(blob, export_filename(platform, 'parsed', format));
+        } catch (e) {
+            document.querySelector('#parse-status').innerText = 'Could not parse items: ' + e;
+        }
 
         event.target.classList.remove('loading');
 
@@ -390,7 +573,7 @@ async function button_handler(event) {
         xhr.send(blob);
 
     } else if(event.target.matches('#clear-history')) {
-        await background.db.uploads.clear();
+        await db.uploads.clear();
         document.querySelector('#clear-history').remove();
         document.querySelectorAll("#upload-table tbody tr").forEach(x => x.remove());
 
@@ -404,7 +587,7 @@ async function button_handler(event) {
             return;
         }
 
-        await background.db.items.clear();
+        await db.items.clear();
 
         event.target.setAttribute('disabled', 'disabled');
         let file = document.querySelector('#ndjson-file').files[0];
@@ -436,7 +619,7 @@ async function button_handler(event) {
                         imported = reformatted_import;
                     }
 
-                    await background.db.items.add(imported);
+                    await db.items.add(imported);
                     imported_items += 1;
                 } catch (e) {
                     skipped += 1;
@@ -534,7 +717,7 @@ const upload_poll = {
      * @returns {Promise<void>}
      */
     add_dataset: async function(progress) {
-        await background.db.uploads.add({
+        await db.uploads.add({
             timestamp: (new Date()).getTime(),
             url: progress["url"],
             platform: progress["datasource"],
@@ -563,147 +746,68 @@ async function get_blob(platform) {
 }
 
 /**
- * Deep search for all values of a given key anywhere in a nested object/array
+ * Get a Blob of parsed items
+ *
+ * Runs the collected items through zs-parser, which reduces them to a flat
+ * table of the fields that are most useful for analysis, deduplicated by post
+ * ID. The parser's status messages are shown in the interface.
+ *
+ * @param platform  Platform to export items for
+ * @param format  'csv' or 'json'
+ * @returns {Promise<Blob>}
  */
-function deepFind(obj, key) {
-    const results = [];
-    function search(o) {
-        if (!o || typeof o !== 'object') return;
-        if (Array.isArray(o)) {
-            for (const item of o) search(item);
-        } else {
-            for (const k of Object.keys(o)) {
-                if (k === key) results.push(o[k]);
-                search(o[k]);
-            }
-        }
-    }
-    search(obj);
-    return results;
-}
-
-/**
- * Extract reduced Facebook fields from a zeeschuimer item.
- * Mirrors the logic of fb_parser() in FB-ndjson-parser.
- */
-function extractFacebookFields(item) {
-    const data = item.data || {};
-
-    let post_id = item.item_id || data.id || '';
-    if (typeof post_id === 'string' && post_id.startsWith('Story:')) {
-        post_id = post_id.split(':')[1];
-    }
-
-    const postUrls = [...new Set(deepFind(data, 'wwwURL').filter(Boolean))];
-    const post_url = postUrls.join('; ');
-
-    // Find story.creation_time anywhere in the tree
-    function findStoryCreationTimes(o) {
-        const times = [];
-        function search(obj) {
-            if (!obj || typeof obj !== 'object') return;
-            if (Array.isArray(obj)) {
-                for (const el of obj) search(el);
-            } else {
-                if (obj.story && obj.story.creation_time) {
-                    times.push(obj.story.creation_time);
-                }
-                for (const k of Object.keys(obj)) search(obj[k]);
-            }
-        }
-        search(o);
-        return times;
-    }
-    const creationTimes = findStoryCreationTimes(data);
-    let creation_time = 'Unknown';
-    if (creationTimes.length > 0) {
-        const ts = Math.min(...creationTimes);
-        const d = new Date(ts * 1000);
-        creation_time = d.toISOString().replace('T', ' ').split('.')[0];
-    }
-
-    // Find 'attachments' anywhere, then 'url' within each
-    const attachmentContainers = deepFind(data, 'attachments');
-    let attachmentUrls = [];
-    for (const container of attachmentContainers) {
-        attachmentUrls = attachmentUrls.concat(deepFind(container, 'url'));
-    }
-    const attachments = [...new Set(attachmentUrls.filter(Boolean))].join('; ');
-
-    // text from comet_sections[*].content.story.message.text
-    let text = '';
-    const cometSections = Array.isArray(data.comet_sections) ? data.comet_sections : (data.comet_sections ? [data.comet_sections] : []);
-    for (const section of cometSections) {
-        const t = section?.content?.story?.message?.text;
-        if (t) { text = t; break; }
-    }
-
-    // reactions from comet_ufi_summary_and_actions_renderer
-    const ufiRenderers = deepFind(data, 'comet_ufi_summary_and_actions_renderer');
-    let reactions = [];
-    let total_reaction_count = 0;
-    for (const ufi of ufiRenderers) {
-        const edges = ufi?.feedback?.top_reactions?.edges;
-        if (edges && Array.isArray(edges) && edges.length > 0) {
-            reactions = edges.map(e => `${e.node?.localized_name}:${e.reaction_count}`);
-            total_reaction_count = edges.reduce((sum, e) => sum + (e.reaction_count || 0), 0);
-            break;
-        }
-    }
-
-    // comment_count
-    const commentRenderers = deepFind(data, 'comments_count_summary_renderer');
-    let comment_count = 0;
-    for (const cr of commentRenderers) {
-        const total = cr?.feedback?.comment_rendering_instance?.comments?.total_count;
-        if (total !== undefined) { comment_count = total; break; }
-    }
-
-    // share_count
-    const shareCounts = deepFind(data, 'i18n_share_count');
-    const share_count = shareCounts.length > 0 ? (parseInt(String(shareCounts[0]).replace(/,/g, '')) || 0) : 0;
-
-    return {
-        post_id,
-        post_url,
-        creation_time,
-        attachments,
-        text,
-        total_reaction_count,
-        reactions: reactions.join('; '),
-        comment_count,
-        share_count
-    };
-}
-
-/**
- * Build a CSV string (with BOM for Excel) from an array of flat objects
- */
-function buildCsv(rows) {
-    if (rows.length === 0) return '';
-    const headers = Object.keys(rows[0]);
-    const escape = v => {
-        const s = String(v ?? '');
-        return (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
-            ? '"' + s.replace(/"/g, '""') + '"'
-            : s;
-    };
-    const lines = [headers.join(',')];
-    for (const row of rows) {
-        lines.push(headers.map(h => escape(row[h])).join(','));
-    }
-    return '\uFEFF' + lines.join('\r\n');
-}
-
-/**
- * Get a CSV Blob of Facebook items with reduced fields
- */
-async function get_facebook_csv_blob(platform) {
-    const rows = [];
+async function get_parsed_blob(platform, format) {
+    let items = [];
     await iterate_items(platform, function(item) {
-        rows.push(extractFacebookFields(item));
+        items.push(item);
     });
-    return new Blob([buildCsv(rows)], {type: 'text/csv;charset=utf-8'});
+
+    let messages = [];
+    const rows = zs_parser.general_parser(items, message => messages.push(message));
+
+    const status = document.querySelector('#parse-status');
+    if(status) {
+        status.innerText = platform + ': ' + messages.join(' \u2022 ');
+    }
+
+    if(format === 'csv') {
+        return new Blob([zs_parser.to_csv(rows)], {type: 'text/csv;charset=utf-8'});
+    }
+
+    return new Blob([zs_parser.to_json(rows)], {type: 'application/json'});
+}
+
+/**
+ * Download a Blob via the browser's download manager
+ *
+ * The object URL is revoked once the download has finished, via
+ * downloadListener().
+ *
+ * @param blob  Blob to download
+ * @param filename  Name to suggest for the downloaded file
+ * @returns {Promise<void>}
+ */
+async function download_file(blob, filename) {
+    const object_url = window.URL.createObjectURL(blob);
+    const download_id = await browser.downloads.download({
+        url: object_url,
+        filename: filename,
+        conflictAction: 'uniquify'
+    });
+    downloadUrls.set(download_id, object_url);
+}
+
+/**
+ * Build a file name for an export of a given platform's items
+ *
+ * @param platform  Platform the items were collected from
+ * @param suffix  File name suffix, e.g. 'parsed'
+ * @param extension  File extension, without leading dot
+ * @returns {string}
+ */
+function export_filename(platform, suffix, extension) {
+    const date = (new Date()).toISOString().split(".")[0].replace(/:/g, "");
+    return 'zeeschuimer-export-' + platform + '-' + (suffix ? suffix + '-' : '') + date + '.' + extension;
 }
 
 /**
@@ -751,12 +855,12 @@ async function iterate_items(platform, callback) {
         // we paginate here in this somewhat roundabout way because firefox
         // crashes if we query everything in one go for large datasets
         if(!previous) {
-            items = await background.db.items
+            items = await db.items
                 .orderBy('id')
                 .filter(item => item.source_platform === platform)
                 .limit(500).toArray();
         } else {
-            items = await background.db.items
+            items = await db.items
                 .where('id')
                 .aboveOrEqual(previous.id)
                 .filter(fastForward(previous, 'id', item => item.source_platform === platform))
@@ -817,6 +921,9 @@ function fastForward(lastRow, idProp, otherCriteria) {
  * Init!
  */
 document.addEventListener('DOMContentLoaded', async function () {
+    platform_modules = await load_platform_modules();
+    await init_parse_export();
+
     get_stats();
     setInterval(get_stats, 1000);
 
@@ -826,19 +933,19 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     const version_container = document.querySelector('.version a');
     const current_version = version_container.innerText;
-    const known_version = await background.browser.storage.local.get('zs-version');
+    const known_version = await browser.storage.local.get('zs-version');
     if(!known_version || current_version !== known_version['zs-version']) {
         const version_alert = createElement('span', {'class': 'popup new-version'}, 'Zeeschuimer has been updated to a new version! You can read the release notes via this link.');
         const ok_button = createElement('button', {'class': 'close-popup'}, 'OK');
         ok_button.addEventListener('click', async function(e) {
-            await background.browser.storage.local.set({'zs-version': current_version});
+            await browser.storage.local.set({'zs-version': current_version});
             document.querySelector('.new-version').remove();
         });
         version_alert.appendChild(ok_button);
         document.querySelector('header').appendChild(version_alert);
     }
 
-    const fourcat_url = await background.browser.storage.local.get('4cat-url');
+    const fourcat_url = await browser.storage.local.get('4cat-url');
     document.querySelector('#fourcat-url').value = fourcat_url['4cat-url'] ? fourcat_url['4cat-url'] : '';
 
     browser.downloads.onChanged.addListener(downloadListener);

@@ -2,6 +2,9 @@
 .idea
 .vs
 .DS_Store
+dist
+*.zip
+*.xpi
 
 # Testing artefacts
 .temp-profile
